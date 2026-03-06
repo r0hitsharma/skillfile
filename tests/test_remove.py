@@ -3,13 +3,10 @@ import json
 
 import pytest
 
+from skillfile.exceptions import ManifestError
 from skillfile.remove import cmd_remove
 
-
-def write_manifest(tmp_path, content):
-    p = tmp_path / "Skillfile"
-    p.write_text(content)
-    return p
+from .helpers import write_manifest
 
 
 def write_lock(tmp_path, locked: dict):
@@ -31,32 +28,30 @@ def _make_args(name):
 # No manifest
 # ---------------------------------------------------------------------------
 
-def test_no_manifest(tmp_path, capsys):
-    with pytest.raises(SystemExit):
+
+def test_no_manifest(tmp_path):
+    with pytest.raises(ManifestError, match="not found"):
         cmd_remove(_make_args("foo"), tmp_path)
-    assert "not found" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
 # Entry not found
 # ---------------------------------------------------------------------------
 
-def test_unknown_name_errors(tmp_path, capsys):
+
+def test_unknown_name_errors(tmp_path):
     write_manifest(tmp_path, "local  skill  skills/foo.md\n")
-    with pytest.raises(SystemExit):
+    with pytest.raises(ManifestError, match="no entry named"):
         cmd_remove(_make_args("nonexistent"), tmp_path)
-    assert "no entry named" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
 # Removes line from Skillfile
 # ---------------------------------------------------------------------------
 
+
 def test_remove_github_entry_removes_line(tmp_path):
-    write_manifest(tmp_path, (
-        "github  agent  owner/repo  agents/my-agent.md\n"
-        "local  skill  skills/foo.md\n"
-    ))
+    write_manifest(tmp_path, ("github  agent  owner/repo  agents/my-agent.md\nlocal  skill  skills/foo.md\n"))
     cmd_remove(_make_args("my-agent"), tmp_path)
     text = (tmp_path / "Skillfile").read_text()
     assert "my-agent" not in text
@@ -71,11 +66,7 @@ def test_remove_local_entry_removes_line(tmp_path):
 
 
 def test_remove_preserves_comments_and_blanks(tmp_path):
-    write_manifest(tmp_path, (
-        "# My agents\n"
-        "\n"
-        "local  skill  skills/foo.md\n"
-    ))
+    write_manifest(tmp_path, ("# My agents\n\nlocal  skill  skills/foo.md\n"))
     cmd_remove(_make_args("foo"), tmp_path)
     text = (tmp_path / "Skillfile").read_text()
     assert "# My agents" in text
@@ -84,6 +75,7 @@ def test_remove_preserves_comments_and_blanks(tmp_path):
 # ---------------------------------------------------------------------------
 # Clears cache directory
 # ---------------------------------------------------------------------------
+
 
 def test_remove_clears_cache(tmp_path):
     write_manifest(tmp_path, "github  agent  owner/repo  agents/my-agent.md\n")
@@ -103,12 +95,16 @@ def test_remove_local_entry_no_cache_no_error(tmp_path):
 # Updates lock file
 # ---------------------------------------------------------------------------
 
+
 def test_remove_updates_lock(tmp_path):
     write_manifest(tmp_path, "github  agent  owner/repo  agents/my-agent.md\n")
-    write_lock(tmp_path, {
-        "github/agent/my-agent": {"sha": "abc123", "raw_url": "https://example.com"},
-        "github/agent/other": {"sha": "def456", "raw_url": "https://example.com/other"},
-    })
+    write_lock(
+        tmp_path,
+        {
+            "github/agent/my-agent": {"sha": "abc123", "raw_url": "https://example.com"},
+            "github/agent/other": {"sha": "def456", "raw_url": "https://example.com/other"},
+        },
+    )
     cmd_remove(_make_args("my-agent"), tmp_path)
     lock = json.loads((tmp_path / "Skillfile.lock").read_text())
     assert "github/agent/my-agent" not in lock

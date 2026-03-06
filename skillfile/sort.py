@@ -1,10 +1,9 @@
 import argparse
-import sys
 from pathlib import Path
 
 from .add import _format_line
+from .exceptions import ManifestError
 from .parser import MANIFEST_NAME, parse_manifest
-
 
 # Auto-generated section headers — always written by sort, never hand-edited.
 _INSTALL_COMMENT = "# install  <platform>  <scope>"
@@ -23,8 +22,10 @@ _SECTION_HEADERS = {
 def _sort_key(entry):
     repo = entry.owner_repo if entry.source_type == "github" else ""
     path = (
-        entry.path_in_repo if entry.source_type == "github"
-        else entry.local_path if entry.source_type == "local"
+        entry.path_in_repo
+        if entry.source_type == "github"
+        else entry.local_path
+        if entry.source_type == "local"
         else entry.url or ""
     )
     return (entry.source_type, repo, path)
@@ -105,8 +106,7 @@ def sorted_manifest_text(manifest, raw_text: str = "") -> str:
 def cmd_sort(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        print(f"error: {MANIFEST_NAME} not found in {repo_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
 
     manifest = parse_manifest(manifest_path)
     raw_text = manifest_path.read_text()

@@ -1,19 +1,11 @@
+import argparse
 import json
 from unittest.mock import patch
 
 from skillfile.models import Entry, LockEntry
-from skillfile.sync import sync_entry
+from skillfile.sync import cmd_sync, sync_entry
 
-
-def make_github_entry(name="test-agent"):
-    return Entry(
-        source_type="github",
-        entity_type="agent",
-        name=name,
-        owner_repo="owner/repo",
-        path_in_repo="agents/test.md",
-        ref="main",
-    )
+from .helpers import make_github_entry, write_manifest
 
 
 def make_local_entry():
@@ -25,10 +17,21 @@ def make_local_entry():
     )
 
 
+def make_dir_entry(name="python-pro"):
+    return Entry(
+        source_type="github",
+        entity_type="skill",
+        name=name,
+        owner_repo="owner/repo",
+        path_in_repo="skills/python-pro",
+        ref="main",
+    )
+
+
 def test_local_entry_no_network_no_vendor(tmp_path):
     entry = make_local_entry()
-    with patch("skillfile.sync.resolve_github_sha") as mock_resolve:
-        with patch("skillfile.sync.fetch_github_file") as mock_fetch:
+    with patch("skillfile.strategies.resolve_github_sha") as mock_resolve:
+        with patch("skillfile.strategies.fetch_github_file") as mock_fetch:
             locked = sync_entry(entry, tmp_path, dry_run=False, locked={}, update=False)
 
     mock_resolve.assert_not_called()
@@ -42,8 +45,8 @@ def test_github_entry_fetches_and_writes(tmp_path):
     sha = "87321636a1c666283d8f17398b45c2644395044b"
     content = b"# Agent content"
 
-    with patch("skillfile.sync.resolve_github_sha", return_value=sha) as mock_resolve:
-        with patch("skillfile.sync.fetch_github_file", return_value=content) as mock_fetch:
+    with patch("skillfile.strategies.resolve_github_sha", return_value=sha) as mock_resolve:
+        with patch("skillfile.strategies.fetch_github_file", return_value=content) as mock_fetch:
             locked = sync_entry(entry, tmp_path, dry_run=False, locked={}, update=False)
 
     mock_resolve.assert_called_once_with("owner/repo", "main")
@@ -69,8 +72,8 @@ def test_skip_when_locked_sha_matches_meta(tmp_path):
 
     locked = {"github/agent/test-agent": LockEntry(sha=sha, raw_url="https://example.com/test.md")}
 
-    with patch("skillfile.sync.resolve_github_sha") as mock_resolve:
-        with patch("skillfile.sync.fetch_github_file") as mock_fetch:
+    with patch("skillfile.strategies.resolve_github_sha") as mock_resolve:
+        with patch("skillfile.strategies.fetch_github_file") as mock_fetch:
             result = sync_entry(entry, tmp_path, dry_run=False, locked=locked, update=False)
 
     mock_resolve.assert_not_called()
@@ -85,23 +88,12 @@ def test_fetch_using_locked_sha_when_vendor_missing(tmp_path):
 
     locked = {"github/agent/test-agent": LockEntry(sha=sha, raw_url="https://example.com/test.md")}
 
-    with patch("skillfile.sync.resolve_github_sha") as mock_resolve:
-        with patch("skillfile.sync.fetch_github_file", return_value=content) as mock_fetch:
-            result = sync_entry(entry, tmp_path, dry_run=False, locked=locked, update=False)
+    with patch("skillfile.strategies.resolve_github_sha") as mock_resolve:
+        with patch("skillfile.strategies.fetch_github_file", return_value=content) as mock_fetch:
+            sync_entry(entry, tmp_path, dry_run=False, locked=locked, update=False)
 
     mock_resolve.assert_not_called()
     mock_fetch.assert_called_once_with("owner/repo", "agents/test.md", sha)
-
-
-def make_dir_entry(name="python-pro"):
-    return Entry(
-        source_type="github",
-        entity_type="skill",
-        name=name,
-        owner_repo="owner/repo",
-        path_in_repo="skills/python-pro",
-        ref="main",
-    )
 
 
 def test_github_dir_entry_fetches_all_files(tmp_path):
@@ -117,9 +109,9 @@ def test_github_dir_entry_fetches_all_files(tmp_path):
             return b"# SKILL content"
         return b"# examples content"
 
-    with patch("skillfile.sync.resolve_github_sha", return_value=sha):
-        with patch("skillfile.sync.list_github_dir", return_value=dir_listing):
-            with patch("skillfile.sync._get", side_effect=fake_get):
+    with patch("skillfile.strategies.resolve_github_sha", return_value=sha):
+        with patch("skillfile.strategies.list_github_dir", return_value=dir_listing):
+            with patch("skillfile.strategies._get", side_effect=fake_get):
                 locked = sync_entry(entry, tmp_path, dry_run=False, locked={}, update=False)
 
     vdir = tmp_path / ".skillfile" / "skills" / "python-pro"
@@ -139,8 +131,8 @@ def test_github_dir_entry_skip_when_up_to_date(tmp_path):
 
     locked = {"github/skill/python-pro": LockEntry(sha=sha, raw_url="https://example.com")}
 
-    with patch("skillfile.sync.resolve_github_sha") as mock_resolve:
-        with patch("skillfile.sync.list_github_dir") as mock_list:
+    with patch("skillfile.strategies.resolve_github_sha") as mock_resolve:
+        with patch("skillfile.strategies.list_github_dir") as mock_list:
             result = sync_entry(entry, tmp_path, dry_run=False, locked=locked, update=False)
 
     mock_resolve.assert_not_called()
@@ -161,10 +153,48 @@ def test_update_flag_re_resolves_despite_lock(tmp_path):
 
     locked = {"github/agent/test-agent": LockEntry(sha=old_sha, raw_url="https://example.com/test.md")}
 
-    with patch("skillfile.sync.resolve_github_sha", return_value=new_sha) as mock_resolve:
-        with patch("skillfile.sync.fetch_github_file", return_value=content) as mock_fetch:
+    with patch("skillfile.strategies.resolve_github_sha", return_value=new_sha) as mock_resolve:
+        with patch("skillfile.strategies.fetch_github_file", return_value=content) as mock_fetch:
             result = sync_entry(entry, tmp_path, dry_run=False, locked=locked, update=True)
 
     mock_resolve.assert_called_once_with("owner/repo", "main")
     mock_fetch.assert_called_once_with("owner/repo", "agents/test.md", new_sha)
     assert result["github/agent/test-agent"].sha == new_sha
+
+
+# ---------------------------------------------------------------------------
+# url source sync
+# ---------------------------------------------------------------------------
+
+
+def test_url_entry_fetch_and_write(tmp_path):
+    entry = Entry(
+        source_type="url",
+        entity_type="skill",
+        name="my-skill",
+        url="https://example.com/my-skill.md",
+    )
+    content = b"# My Skill"
+
+    with patch("skillfile.strategies._get", return_value=content) as mock_get:
+        sync_entry(entry, tmp_path, dry_run=False, locked={}, update=False)
+
+    mock_get.assert_called_once_with("https://example.com/my-skill.md")
+    vdir = tmp_path / ".skillfile" / "skills" / "my-skill"
+    assert (vdir / "my-skill.md").read_bytes() == content
+
+
+# ---------------------------------------------------------------------------
+# --update through cmd_sync
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_sync_update_flag_passed_to_sync_entry(tmp_path):
+    write_manifest(tmp_path, "github  agent  owner/repo  agents/agent.md\n")
+    args = argparse.Namespace(dry_run=False, entry=None, update=True)
+
+    with patch("skillfile.sync.sync_entry", return_value={}) as mock_sync:
+        cmd_sync(args, tmp_path)
+
+    # update is the 5th positional arg (index 4)
+    assert mock_sync.call_args.args[4] is True

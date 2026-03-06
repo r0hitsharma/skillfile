@@ -4,12 +4,9 @@ from unittest.mock import patch
 import pytest
 
 from skillfile.add import cmd_add
+from skillfile.exceptions import ManifestError, NetworkError
 
-
-def write_manifest(tmp_path, content=""):
-    p = tmp_path / "Skillfile"
-    p.write_text(content)
-    return p
+from .helpers import write_manifest
 
 
 def _github(entity_type, owner_repo, path, ref=None, name=None):
@@ -45,15 +42,16 @@ def _url(entity_type, url, name=None):
 # No manifest
 # ---------------------------------------------------------------------------
 
-def test_no_manifest(tmp_path, capsys):
-    with pytest.raises(SystemExit):
+
+def test_no_manifest(tmp_path):
+    with pytest.raises(ManifestError, match="not found"):
         cmd_add(_github("agent", "owner/repo", "path/to/agent.md"), tmp_path)
-    assert "not found" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
 # GitHub entries
 # ---------------------------------------------------------------------------
+
 
 def test_add_github_inferred_name(tmp_path):
     write_manifest(tmp_path)
@@ -95,6 +93,7 @@ def test_add_github_explicit_name_omitted_when_matches_stem(tmp_path):
 # Local entries
 # ---------------------------------------------------------------------------
 
+
 def test_add_local_inferred_name(tmp_path):
     write_manifest(tmp_path)
     cmd_add(_local("skill", "skills/git/commit.md"), tmp_path)
@@ -112,6 +111,7 @@ def test_add_local_explicit_name(tmp_path):
 # ---------------------------------------------------------------------------
 # URL entries
 # ---------------------------------------------------------------------------
+
 
 def test_add_url_inferred_name(tmp_path):
     write_manifest(tmp_path)
@@ -131,16 +131,17 @@ def test_add_url_explicit_name(tmp_path):
 # Duplicate name
 # ---------------------------------------------------------------------------
 
-def test_add_duplicate_name_errors(tmp_path, capsys):
+
+def test_add_duplicate_name_errors(tmp_path):
     write_manifest(tmp_path, "local  skill  skills/commit.md\n")
-    with pytest.raises(SystemExit):
+    with pytest.raises(ManifestError, match="already exists"):
         cmd_add(_local("skill", "skills/commit.md"), tmp_path)
-    assert "already exists" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
 # Auto-install after add
 # ---------------------------------------------------------------------------
+
 
 def test_add_triggers_install_when_targets_configured(tmp_path):
     write_manifest(tmp_path, "install  claude-code  local\n")
@@ -163,6 +164,7 @@ def test_add_no_install_when_no_targets(tmp_path, capsys):
 # Directory path entries
 # ---------------------------------------------------------------------------
 
+
 def test_add_github_directory_path_accepted(tmp_path):
     write_manifest(tmp_path)
     cmd_add(_github("skill", "owner/repo", "categories/01-core-development"), tmp_path)
@@ -182,14 +184,15 @@ def test_add_github_directory_name_inferred_from_last_segment(tmp_path):
 # Rollback on install failure
 # ---------------------------------------------------------------------------
 
+
 def test_add_rollback_on_install_failure(tmp_path, capsys):
     write_manifest(tmp_path, "install  claude-code  local\n")
 
-    def failing_install(*_args, **_kwargs):
-        raise SystemExit(1)
+    def failing_sync(*_args, **_kwargs):
+        raise NetworkError("network failure")
 
-    with patch("skillfile.add.sync_entry", side_effect=failing_install):
-        with pytest.raises(SystemExit):
+    with patch("skillfile.add.sync_entry", side_effect=failing_sync):
+        with pytest.raises(NetworkError):
             cmd_add(_local("skill", "skills/new.md"), tmp_path)
 
     text = (tmp_path / "Skillfile").read_text()
@@ -200,6 +203,7 @@ def test_add_rollback_on_install_failure(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 # Appends without overwriting existing content
 # ---------------------------------------------------------------------------
+
 
 def test_add_appends_to_existing_content(tmp_path):
     write_manifest(tmp_path, "local  skill  skills/existing.md\n")

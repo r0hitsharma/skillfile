@@ -15,10 +15,7 @@ def read_lock(repo_root: Path) -> dict[str, LockEntry]:
     if not lock_path.exists():
         return {}
     data = json.loads(lock_path.read_text())
-    return {
-        key: LockEntry(sha=val["sha"], raw_url=val["raw_url"])
-        for key, val in data.items()
-    }
+    return {key: LockEntry(sha=val["sha"], raw_url=val["raw_url"]) for key, val in data.items()}
 
 
 def write_lock(repo_root: Path, locked: dict[str, LockEntry]) -> None:

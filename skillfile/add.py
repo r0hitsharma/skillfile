@@ -2,73 +2,41 @@ import argparse
 import sys
 from pathlib import Path
 
-from .install import install_entry, resolve_target_dir, ADAPTER_PATHS
+from .exceptions import ManifestError, SkillfileError
+from .install import ADAPTER_PATHS, install_entry
 from .lock import read_lock, write_lock
 from .models import Entry
-from .parser import DEFAULT_REF, MANIFEST_NAME, _infer_name, parse_manifest
+from .parser import MANIFEST_NAME, parse_manifest
+from .strategies import STRATEGIES
 from .sync import sync_entry
 
 
 def _format_line(entry: Entry) -> str:
-    """Format an entry as a minimal Skillfile line, omitting default name and ref."""
+    """Format an entry as a Skillfile line."""
     parts = [entry.source_type, entry.entity_type]
-
-    if entry.source_type == "github":
-        if entry.name != _infer_name(entry.path_in_repo):
-            parts.append(entry.name)
-        parts.append(entry.owner_repo)
-        parts.append(entry.path_in_repo)
-        if entry.ref != DEFAULT_REF:
-            parts.append(entry.ref)
-
-    elif entry.source_type == "local":
-        if entry.name != _infer_name(entry.local_path):
-            parts.append(entry.name)
-        parts.append(entry.local_path)
-
-    elif entry.source_type == "url":
-        if entry.name != _infer_name(entry.url):
-            parts.append(entry.name)
-        parts.append(entry.url)
-
+    parts.extend(STRATEGIES[entry.source_type].format_parts(entry))
     return "  ".join(parts)
 
 
 def cmd_add(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        print(f"error: {MANIFEST_NAME} not found in {repo_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
 
     source_type = args.add_source
-    entity_type = args.entity_type
+    if source_type not in STRATEGIES:
+        raise ManifestError(f"unknown source type '{source_type}'")
 
-    if source_type == "github":
-        path = args.path
-        name = args.name or _infer_name(path)
-        ref = args.ref or DEFAULT_REF
-        entry = Entry("github", entity_type, name,
-                      owner_repo=args.owner_repo,
-                      path_in_repo=path,
-                      ref=ref)
-    elif source_type == "local":
-        name = args.name or _infer_name(args.path)
-        entry = Entry("local", entity_type, name, local_path=args.path)
-    elif source_type == "url":
-        name = args.name or _infer_name(args.url)
-        entry = Entry("url", entity_type, name, url=args.url)
-    else:
-        print(f"error: unknown source type '{source_type}'", file=sys.stderr)
-        sys.exit(1)
+    entity_type = args.entity_type
+    entry = STRATEGIES[source_type].from_args(args, entity_type)
 
     manifest = parse_manifest(manifest_path)
     existing = {e.name for e in manifest.entries}
     if entry.name in existing:
-        print(f"error: entry '{entry.name}' already exists in {MANIFEST_NAME}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"entry '{entry.name}' already exists in {MANIFEST_NAME}")
 
     line = _format_line(entry)
-    original = manifest_path.read_text()
+    original_manifest = manifest_path.read_text()
     with open(manifest_path, "a") as f:
         f.write(line + "\n")
 
@@ -79,6 +47,9 @@ def cmd_add(args: argparse.Namespace, repo_root: Path) -> None:
         print("No install targets configured — run `skillfile init` then `skillfile install` to deploy.")
         return
 
+    lock_path = repo_root / "Skillfile.lock"
+    original_lock = lock_path.read_text() if lock_path.exists() else None
+
     try:
         locked = read_lock(repo_root)
         locked = sync_entry(entry, repo_root, dry_run=False, locked=locked, update=False)
@@ -86,7 +57,11 @@ def cmd_add(args: argparse.Namespace, repo_root: Path) -> None:
         for target in manifest.install_targets:
             if target.adapter in ADAPTER_PATHS:
                 install_entry(entry, target, repo_root, copy_mode=False, dry_run=False)
-    except SystemExit:
-        manifest_path.write_text(original)
+    except SkillfileError:
+        manifest_path.write_text(original_manifest)
+        if original_lock is None:
+            lock_path.unlink(missing_ok=True)
+        else:
+            lock_path.write_text(original_lock)
         print(f"Rolled back: removed '{entry.name}' from {MANIFEST_NAME}", file=sys.stderr)
         raise

@@ -1,18 +1,18 @@
 import argparse
-import sys
 from pathlib import Path
 
+from .exceptions import ManifestError
 from .lock import lock_key, read_lock
 from .parser import MANIFEST_NAME, parse_manifest
 from .resolver import resolve_github_sha
-from .sync import _meta_sha, vendor_dir_for
+from .strategies import _meta_sha
+from .sync import vendor_dir_for
 
 
 def cmd_status(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        print(f"error: {MANIFEST_NAME} not found in {repo_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
 
     entries = parse_manifest(manifest_path).entries
     locked = read_lock(repo_root)

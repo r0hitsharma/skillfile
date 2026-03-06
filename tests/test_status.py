@@ -4,13 +4,10 @@ from unittest.mock import patch
 
 import pytest
 
+from skillfile.exceptions import ManifestError
 from skillfile.status import cmd_status
 
-
-def write_manifest(tmp_path, content):
-    p = tmp_path / "Skillfile"
-    p.write_text(content)
-    return p
+from .helpers import write_manifest
 
 
 def write_lock(tmp_path, locked: dict):
@@ -31,15 +28,16 @@ def _make_args(check_upstream=False):
 # No manifest
 # ---------------------------------------------------------------------------
 
-def test_cmd_status_no_manifest(tmp_path, capsys):
-    with pytest.raises(SystemExit):
+
+def test_cmd_status_no_manifest(tmp_path):
+    with pytest.raises(ManifestError, match="not found"):
         cmd_status(_make_args(), tmp_path)
-    assert "not found" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
 # Local entries
 # ---------------------------------------------------------------------------
+
 
 def test_local_entry_shows_local(tmp_path, capsys):
     write_manifest(tmp_path, "local  skill  foo  skills/foo.md\n")
@@ -55,6 +53,7 @@ def test_local_entry_shows_local(tmp_path, capsys):
 # Unlocked entries
 # ---------------------------------------------------------------------------
 
+
 def test_github_entry_unlocked(tmp_path, capsys):
     write_manifest(tmp_path, "github  agent  my-agent  owner/repo  agents/agent.md  main\n")
 
@@ -68,6 +67,7 @@ def test_github_entry_unlocked(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 # Locked entries — vendor present
 # ---------------------------------------------------------------------------
+
 
 def test_github_entry_locked_vendor_matches(tmp_path, capsys):
     sha = "87321636a1c666283d8f17398b45c2644395044b"
@@ -98,6 +98,7 @@ def test_github_entry_locked_vendor_missing(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 # --check-upstream
 # ---------------------------------------------------------------------------
+
 
 def test_check_upstream_up_to_date(tmp_path, capsys):
     sha = "87321636a1c666283d8f17398b45c2644395044b"

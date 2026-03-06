@@ -3,18 +3,20 @@ import shutil
 import sys
 from pathlib import Path
 
+from .exceptions import ManifestError
 from .lock import read_lock, write_lock
 from .models import Entry, InstallTarget
 from .parser import MANIFEST_NAME, parse_manifest
-from .sync import _content_file, _is_dir_entry, sync_entry, vendor_dir_for
+from .strategies import STRATEGIES
+from .sync import sync_entry, vendor_dir_for
 
 # Adapter target directories.
 # Paths starting with '~' are global (expanded at runtime).
 # Relative paths are local (resolved from repo_root).
 ADAPTER_PATHS: dict[str, dict[str, dict[str, str]]] = {
     "claude-code": {
-        "agent": {"global": "~/.claude/agents",  "local": ".claude/agents"},
-        "skill": {"global": "~/.claude/skills",   "local": ".claude/skills"},
+        "agent": {"global": "~/.claude/agents", "local": ".claude/agents"},
+        "skill": {"global": "~/.claude/skills", "local": ".claude/skills"},
     },
 }
 
@@ -31,12 +33,13 @@ def resolve_target_dir(adapter: str, entity_type: str, scope: str, repo_root: Pa
 
 def _source_path(entry: Entry, repo_root: Path) -> Path | None:
     """Return the path to the source file or directory for an entry."""
+    strategy = STRATEGIES[entry.source_type]
     if entry.source_type == "local":
         return repo_root / entry.local_path
     vdir = vendor_dir_for(entry, repo_root)
-    if _is_dir_entry(entry):
+    if strategy.is_dir_entry(entry):
         return vdir if vdir.exists() else None
-    filename = _content_file(entry)
+    filename = strategy.content_file(entry)
     if not filename:
         return None
     return vdir / filename
@@ -59,14 +62,15 @@ def install_entry(
 
     target_dir = resolve_target_dir(target.adapter, entry.entity_type, target.scope, repo_root)
 
-    if _is_dir_entry(entry) and entry.entity_type == "agent":
+    is_dir = STRATEGIES[entry.source_type].is_dir_entry(entry)
+    if is_dir and entry.entity_type == "agent":
         # A directory of agents: each .md file is a separate agent, deployed individually.
         # (Skills are a coherent unit — a skill IS its directory. Agents are not.)
         _install_dir_exploded(source, target_dir, copy_mode, dry_run)
     else:
         # Single file (any entity type) or skill directory.
-        dest = target_dir / (entry.name if _is_dir_entry(entry) else f"{entry.name}.md")
-        _install_one(source, dest, is_dir=_is_dir_entry(entry), copy_mode=copy_mode, dry_run=dry_run)
+        dest = target_dir / (entry.name if is_dir else f"{entry.name}.md")
+        _install_one(source, dest, is_dir=is_dir, copy_mode=copy_mode, dry_run=dry_run)
 
 
 def _install_one(source: Path, dest: Path, is_dir: bool, copy_mode: bool, dry_run: bool) -> None:
@@ -106,14 +110,12 @@ def _install_dir_exploded(source_dir: Path, target_dir: Path, copy_mode: bool, d
 def cmd_install(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        print(f"error: {MANIFEST_NAME} not found in {repo_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
 
     manifest = parse_manifest(manifest_path)
 
     if not manifest.install_targets:
-        print("No install targets configured. Run `skillfile init` first.", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError("No install targets configured. Run `skillfile init` first.")
 
     copy_mode = getattr(args, "copy", False)
     dry_run = getattr(args, "dry_run", False)

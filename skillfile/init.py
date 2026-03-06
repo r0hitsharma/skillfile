@@ -1,7 +1,7 @@
 import argparse
-import sys
 from pathlib import Path
 
+from .exceptions import ManifestError
 from .install import KNOWN_ADAPTERS
 from .parser import MANIFEST_NAME, parse_manifest
 
@@ -44,7 +44,7 @@ def _collect_targets() -> list[tuple[str, str]]:
 def _rewrite_install_lines(manifest_path: Path, new_targets: list[tuple[str, str]]) -> None:
     """Replace all install lines in the Skillfile with new_targets."""
     lines = manifest_path.read_text().splitlines(keepends=True)
-    non_install = [l for l in lines if not l.strip().startswith("install ") and not l.strip() == "install"]
+    non_install = [line for line in lines if not line.strip().startswith("install ") and not line.strip() == "install"]
 
     # Strip leading blank lines from remaining content
     while non_install and not non_install[0].strip():
@@ -62,8 +62,7 @@ def _rewrite_install_lines(manifest_path: Path, new_targets: list[tuple[str, str
 def cmd_init(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        print(f"error: {MANIFEST_NAME} not found in {repo_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
 
     manifest = parse_manifest(manifest_path)
     existing = manifest.install_targets

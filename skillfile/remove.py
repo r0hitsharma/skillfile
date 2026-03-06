@@ -1,16 +1,11 @@
 import argparse
 import shutil
-import sys
 from pathlib import Path
 
+from .exceptions import ManifestError
 from .lock import lock_key, read_lock, write_lock
-from .parser import (
-    MANIFEST_NAME,
-    _parse_github,
-    _parse_local,
-    _parse_url,
-    parse_manifest,
-)
+from .parser import MANIFEST_NAME, parse_manifest
+from .strategies import STRATEGIES
 from .sync import vendor_dir_for
 
 
@@ -18,31 +13,24 @@ def _name_from_parts(parts: list[str]) -> str | None:
     """Return the entry name if parts parse as a valid entry, else None."""
     if len(parts) < 3:
         return None
-    source_type = parts[0]
-    if source_type == "github":
-        e = _parse_github(parts, 0)
-    elif source_type == "local":
-        e = _parse_local(parts, 0)
-    elif source_type == "url":
-        e = _parse_url(parts, 0)
-    else:
+    strategy = STRATEGIES.get(parts[0])
+    if strategy is None:
         return None
+    e = strategy.parse(parts, 0)
     return e.name if e else None
 
 
 def cmd_remove(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        print(f"error: {MANIFEST_NAME} not found in {repo_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
 
     name = args.name
     manifest = parse_manifest(manifest_path)
     matching = [e for e in manifest.entries if e.name == name]
 
     if not matching:
-        print(f"error: no entry named '{name}' in {MANIFEST_NAME}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"no entry named '{name}' in {MANIFEST_NAME}")
 
     entry = matching[0]
 

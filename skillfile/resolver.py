@@ -1,7 +1,8 @@
 import json
-import sys
 import urllib.error
 import urllib.request
+
+from .exceptions import NetworkError
 
 
 def _get(url: str) -> bytes:
@@ -10,11 +11,9 @@ def _get(url: str) -> bytes:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read()
     except urllib.error.HTTPError as e:
-        print(f"error: HTTP {e.code} fetching {url}", file=sys.stderr)
-        sys.exit(1)
+        raise NetworkError(f"HTTP {e.code} fetching {url}") from e
     except urllib.error.URLError as e:
-        print(f"error: {e.reason} fetching {url}", file=sys.stderr)
-        sys.exit(1)
+        raise NetworkError(f"{e.reason} fetching {url}") from e
 
 
 def _try_resolve_sha(owner_repo: str, ref: str) -> str | None:
@@ -33,8 +32,7 @@ def _try_resolve_sha(owner_repo: str, ref: str) -> str | None:
     except urllib.error.HTTPError as e:
         if 400 <= e.code < 500:
             return None
-        print(f"error: could not resolve {owner_repo}@{ref}: HTTP {e.code}", file=sys.stderr)
-        sys.exit(1)
+        raise NetworkError(f"could not resolve {owner_repo}@{ref}: HTTP {e.code}") from e
 
 
 def resolve_github_sha(owner_repo: str, ref: str) -> str:
@@ -51,8 +49,7 @@ def resolve_github_sha(owner_repo: str, ref: str) -> str:
         sha = _try_resolve_sha(owner_repo, fallback)
         if sha is not None:
             return sha
-    print(f"error: could not resolve {owner_repo}@{ref}", file=sys.stderr)
-    sys.exit(1)
+    raise NetworkError(f"could not resolve {owner_repo}@{ref}")
 
 
 def fetch_github_file(owner_repo: str, path_in_repo: str, sha: str) -> bytes:
@@ -76,11 +73,9 @@ def list_github_dir(owner_repo: str, path: str, ref: str) -> list[dict]:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        print(f"error: HTTP {e.code} fetching {url}", file=sys.stderr)
-        sys.exit(1)
+        raise NetworkError(f"HTTP {e.code} fetching {url}") from e
     except urllib.error.URLError as e:
-        print(f"error: {e.reason} fetching {url}", file=sys.stderr)
-        sys.exit(1)
+        raise NetworkError(f"{e.reason} fetching {url}") from e
     if isinstance(data, list):
         return [item for item in data if item["type"] == "file"]
     return []

@@ -43,11 +43,18 @@ def test_resolve_github_sha_main_falls_back_to_master():
         call_count += 1
         if call_count == 1:
             raise http_422
+
         # second call (master) succeeds
         class FakeResp:
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def read(self): return body
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return body
+
         return FakeResp()
 
     with patch("skillfile.resolver.urllib.request.urlopen", side_effect=fake_urlopen):
@@ -70,10 +77,17 @@ def test_resolve_github_sha_master_falls_back_to_main():
         call_count += 1
         if call_count == 1:
             raise http_422
+
         class FakeResp:
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def read(self): return body
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return body
+
         return FakeResp()
 
     with patch("skillfile.resolver.urllib.request.urlopen", side_effect=fake_urlopen):

@@ -21,9 +21,7 @@ def test_lock_key_format():
 
 
 def test_write_lock_valid_json(tmp_path):
-    locked = {
-        "github/agent/test": LockEntry(sha="abc123", raw_url="https://example.com/file.md")
-    }
+    locked = {"github/agent/test": LockEntry(sha="abc123", raw_url="https://example.com/file.md")}
     write_lock(tmp_path, locked)
     content = (tmp_path / "Skillfile.lock").read_text()
     data = json.loads(content)

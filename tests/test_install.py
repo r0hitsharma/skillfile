@@ -1,9 +1,9 @@
 import argparse
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
+from skillfile.exceptions import ManifestError
 from skillfile.install import cmd_install, install_entry, resolve_target_dir
 from skillfile.models import Entry, InstallTarget
 
@@ -45,6 +45,7 @@ def make_target(adapter="claude-code", scope="local"):
 # resolve_target_dir
 # ---------------------------------------------------------------------------
 
+
 def test_resolve_target_dir_global_agent(tmp_path):
     d = resolve_target_dir("claude-code", "agent", "global", tmp_path)
     assert d == Path("~/.claude/agents").expanduser()
@@ -68,6 +69,7 @@ def test_resolve_target_dir_local_skill(tmp_path):
 # ---------------------------------------------------------------------------
 # install_entry — local source
 # ---------------------------------------------------------------------------
+
 
 def test_install_local_entry_symlink(tmp_path):
     source_file = tmp_path / "skills" / "my-skill.md"
@@ -137,6 +139,7 @@ def test_install_entry_overwrites_existing_symlink(tmp_path):
 # ---------------------------------------------------------------------------
 # install_entry — github (vendored) source
 # ---------------------------------------------------------------------------
+
 
 def test_install_github_entry_symlink(tmp_path):
     vdir = tmp_path / ".skillfile" / "agents" / "my-agent"
@@ -275,6 +278,7 @@ def test_install_entry_unknown_entity_type_skipped(tmp_path):
 # cmd_install
 # ---------------------------------------------------------------------------
 
+
 def _make_args(dry_run=False, copy=False):
     args = argparse.Namespace()
     args.dry_run = dry_run
@@ -282,17 +286,15 @@ def _make_args(dry_run=False, copy=False):
     return args
 
 
-def test_cmd_install_no_manifest(tmp_path, capsys):
-    with pytest.raises(SystemExit):
+def test_cmd_install_no_manifest(tmp_path):
+    with pytest.raises(ManifestError, match="not found"):
         cmd_install(_make_args(), tmp_path)
-    assert "not found" in capsys.readouterr().err
 
 
-def test_cmd_install_no_install_targets(tmp_path, capsys):
+def test_cmd_install_no_install_targets(tmp_path):
     (tmp_path / "Skillfile").write_text("local  skill  foo  skills/foo.md\n")
-    with pytest.raises(SystemExit):
+    with pytest.raises(ManifestError, match="No install targets"):
         cmd_install(_make_args(), tmp_path)
-    assert "No install targets" in capsys.readouterr().err
 
 
 def test_cmd_install_unknown_adapter_warns(tmp_path, capsys):

@@ -9,8 +9,8 @@ class LockEntry:
 
 @dataclass
 class Entry:
-    source_type: str   # local | github | url
-    entity_type: str   # skill | agent
+    source_type: str  # local | github | url
+    entity_type: str  # skill | agent
     name: str
     # github
     owner_repo: str = ""
@@ -24,8 +24,8 @@ class Entry:
 
 @dataclass
 class InstallTarget:
-    adapter: str   # e.g. "claude-code"
-    scope: str     # "global" | "local"
+    adapter: str  # e.g. "claude-code"
+    scope: str  # "global" | "local"
 
 
 @dataclass

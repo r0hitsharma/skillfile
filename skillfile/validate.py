@@ -2,6 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .exceptions import ManifestError
 from .install import ADAPTER_PATHS
 from .parser import MANIFEST_NAME, parse_manifest
 
@@ -9,8 +10,7 @@ from .parser import MANIFEST_NAME, parse_manifest
 def cmd_validate(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        print(f"error: {MANIFEST_NAME} not found in {repo_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
 
     # parse_manifest already emits warnings for malformed lines.
     manifest = parse_manifest(manifest_path)
@@ -20,10 +20,7 @@ def cmd_validate(args: argparse.Namespace, repo_root: Path) -> None:
     seen: dict[str, str] = {}
     for entry in manifest.entries:
         if entry.name in seen:
-            errors.append(
-                f"duplicate name '{entry.name}' "
-                f"({seen[entry.name]} and {entry.source_type})"
-            )
+            errors.append(f"duplicate name '{entry.name}' ({seen[entry.name]} and {entry.source_type})")
         else:
             seen[entry.name] = entry.source_type
 
@@ -42,7 +39,7 @@ def cmd_validate(args: argparse.Namespace, repo_root: Path) -> None:
     if errors:
         for msg in errors:
             print(f"error: {msg}", file=sys.stderr)
-        sys.exit(1)
+        raise ManifestError()
 
     n = len(manifest.entries)
     t = len(manifest.install_targets)

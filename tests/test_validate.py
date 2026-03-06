@@ -2,13 +2,10 @@ import argparse
 
 import pytest
 
+from skillfile.exceptions import ManifestError
 from skillfile.validate import cmd_validate
 
-
-def write_manifest(tmp_path, content):
-    p = tmp_path / "Skillfile"
-    p.write_text(content)
-    return p
+from .helpers import write_manifest
 
 
 def _make_args():
@@ -19,15 +16,16 @@ def _make_args():
 # No manifest
 # ---------------------------------------------------------------------------
 
-def test_no_manifest(tmp_path, capsys):
-    with pytest.raises(SystemExit):
+
+def test_no_manifest(tmp_path):
+    with pytest.raises(ManifestError, match="not found"):
         cmd_validate(_make_args(), tmp_path)
-    assert "not found" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
 # Valid manifests
 # ---------------------------------------------------------------------------
+
 
 def test_valid_empty_manifest(tmp_path, capsys):
     write_manifest(tmp_path, "")
@@ -60,12 +58,10 @@ def test_valid_with_known_install_target(tmp_path, capsys):
 # Duplicate names
 # ---------------------------------------------------------------------------
 
+
 def test_duplicate_name_errors(tmp_path, capsys):
-    write_manifest(tmp_path, (
-        "local  skill  skills/foo.md\n"
-        "github  agent  owner/repo  skills/foo.md\n"
-    ))
-    with pytest.raises(SystemExit):
+    write_manifest(tmp_path, ("local  skill  skills/foo.md\ngithub  agent  owner/repo  skills/foo.md\n"))
+    with pytest.raises(ManifestError):
         cmd_validate(_make_args(), tmp_path)
     assert "duplicate" in capsys.readouterr().err
 
@@ -74,9 +70,10 @@ def test_duplicate_name_errors(tmp_path, capsys):
 # Missing local path
 # ---------------------------------------------------------------------------
 
+
 def test_missing_local_path_errors(tmp_path, capsys):
     write_manifest(tmp_path, "local  skill  skills/nonexistent.md\n")
-    with pytest.raises(SystemExit):
+    with pytest.raises(ManifestError):
         cmd_validate(_make_args(), tmp_path)
     assert "not found" in capsys.readouterr().err
 
@@ -85,9 +82,10 @@ def test_missing_local_path_errors(tmp_path, capsys):
 # Unknown platform
 # ---------------------------------------------------------------------------
 
+
 def test_unknown_platform_errors(tmp_path, capsys):
     write_manifest(tmp_path, "install  unknown-platform  global\n")
-    with pytest.raises(SystemExit):
+    with pytest.raises(ManifestError):
         cmd_validate(_make_args(), tmp_path)
     assert "unknown platform" in capsys.readouterr().err
 
@@ -96,12 +94,10 @@ def test_unknown_platform_errors(tmp_path, capsys):
 # Multiple errors reported
 # ---------------------------------------------------------------------------
 
+
 def test_multiple_errors_all_reported(tmp_path, capsys):
-    write_manifest(tmp_path, (
-        "install  unknown-platform  global\n"
-        "local  skill  skills/missing.md\n"
-    ))
-    with pytest.raises(SystemExit):
+    write_manifest(tmp_path, ("install  unknown-platform  global\nlocal  skill  skills/missing.md\n"))
+    with pytest.raises(ManifestError):
         cmd_validate(_make_args(), tmp_path)
     err = capsys.readouterr().err
     assert "unknown platform" in err

@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from .add import cmd_add
+from .exceptions import SkillfileError
 from .init import cmd_init
 from .install import cmd_install
 from .remove import cmd_remove
@@ -72,25 +73,32 @@ def main() -> None:
 
     repo_root = Path.cwd()
 
-    if args.command == "sync":
-        cmd_sync(args, repo_root)
-    elif args.command == "status":
-        cmd_status(args, repo_root)
-    elif args.command == "init":
-        cmd_init(args, repo_root)
-    elif args.command == "install":
-        cmd_install(args, repo_root)
-    elif args.command == "add":
-        if args.add_source is None:
-            add_p.print_help()
-            sys.exit(1)
-        cmd_add(args, repo_root)
-    elif args.command == "remove":
-        cmd_remove(args, repo_root)
-    elif args.command == "validate":
-        cmd_validate(args, repo_root)
-    elif args.command == "sort":
-        cmd_sort(args, repo_root)
+    try:
+        match args.command:
+            case "sync":
+                cmd_sync(args, repo_root)
+            case "status":
+                cmd_status(args, repo_root)
+            case "init":
+                cmd_init(args, repo_root)
+            case "install":
+                cmd_install(args, repo_root)
+            case "add" if args.add_source is None:
+                add_p.print_help()
+                sys.exit(1)
+            case "add":
+                cmd_add(args, repo_root)
+            case "remove":
+                cmd_remove(args, repo_root)
+            case "validate":
+                cmd_validate(args, repo_root)
+            case "sort":
+                cmd_sort(args, repo_root)
+    except SkillfileError as e:
+        msg = str(e)
+        if msg:
+            print(f"error: {msg}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
