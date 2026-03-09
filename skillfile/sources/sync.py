@@ -74,7 +74,7 @@ def sync_entries_parallel(
 def cmd_sync(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     entries = parse_manifest(manifest_path).entries
 

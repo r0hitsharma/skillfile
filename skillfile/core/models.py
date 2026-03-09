@@ -12,7 +12,6 @@ class SyncContext:
 
 @dataclass
 class InstallOptions:
-    link_mode: bool = False
     dry_run: bool = False
     overwrite: bool = True
 

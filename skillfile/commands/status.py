@@ -26,7 +26,7 @@ def _is_modified_local(entry, manifest: Manifest, repo_root: Path) -> bool:
             return _is_dir_modified_local(entry, manifest, repo_root)
 
         dest = installed_path(entry, manifest, repo_root)
-        if not dest.exists() or dest.is_symlink():
+        if not dest.exists():
             return False
 
         vdir = vendor_dir_for(entry, repo_root)
@@ -65,7 +65,7 @@ def _is_dir_modified_local(entry, manifest: Manifest, repo_root: Path) -> bool:
                 continue
             filename = str(cache_file.relative_to(vdir))
             inst_path = installed.get(filename)
-            if inst_path is None or not inst_path.exists() or inst_path.is_symlink():
+            if inst_path is None or not inst_path.exists():
                 continue
 
             cache_text = cache_file.read_text()
@@ -85,7 +85,7 @@ def _is_dir_modified_local(entry, manifest: Manifest, repo_root: Path) -> bool:
 def cmd_status(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     manifest = parse_manifest(manifest_path)
     entries = manifest.entries

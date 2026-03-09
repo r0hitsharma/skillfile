@@ -65,6 +65,8 @@ url  skill  https://example.com/skill.md
 
 Line-oriented, space-delimited, human-editable. No YAML, no TOML.
 
+**Name inference:** When `name` is omitted, it's inferred from the filename stem. For `github` entries, a field containing `/` is treated as `owner/repo` (not a name). Names must match `[a-zA-Z0-9._-]` — they become directory names and filenames. Quoted fields (`"path with spaces"`) are supported for paths.
+
 ## Directory layout
 
 ```

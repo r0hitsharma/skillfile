@@ -84,7 +84,7 @@ def _update_gitignore(repo_root: Path) -> None:
 def cmd_init(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     manifest = parse_manifest(manifest_path)
     existing = manifest.install_targets

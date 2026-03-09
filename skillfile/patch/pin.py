@@ -23,7 +23,7 @@ from skillfile.sources.strategies import STRATEGIES
 from skillfile.sources.sync import vendor_dir_for
 
 
-def _pin_dir_entry(entry: Entry, manifest: Manifest, repo_root: Path) -> str:
+def _pin_dir_entry(entry: Entry, manifest: Manifest, repo_root: Path, *, dry_run: bool = False) -> str:
     """Pin a directory entry by comparing installed vs vendor cache. Local, no network."""
     vdir = vendor_dir_for(entry, repo_root)
     if not vdir.is_dir():
@@ -39,22 +39,24 @@ def _pin_dir_entry(entry: Entry, manifest: Manifest, repo_root: Path) -> str:
             continue
         filename = str(cache_file.relative_to(vdir))
         inst_path = installed.get(filename)
-        if inst_path is None or not inst_path.exists() or inst_path.is_symlink():
+        if inst_path is None or not inst_path.exists():
             continue
         original_text = cache_file.read_text()
         patch_text = generate_patch(original_text, inst_path.read_text(), filename)
         if patch_text:
-            write_dir_patch(entry, filename, patch_text, repo_root)
+            if not dry_run:
+                write_dir_patch(entry, filename, patch_text, repo_root)
             pinned.append(filename)
-        else:
+        elif not dry_run:
             remove_dir_patch(entry, filename, repo_root)
 
+    prefix = "Would pin" if dry_run else "Pinned"
     if pinned:
-        return f"Pinned '{entry.name}' ({', '.join(pinned)})"
+        return f"{prefix} '{entry.name}' ({', '.join(pinned)})"
     return f"'{entry.name}' matches upstream — nothing to pin"
 
 
-def _pin_entry(entry: Entry, manifest: Manifest, repo_root: Path) -> str:
+def _pin_entry(entry: Entry, manifest: Manifest, repo_root: Path, *, dry_run: bool = False) -> str:
     """Pin one entry. Returns a status string. Raises ManifestError on hard errors."""
     if entry.source_type == "local":
         return f"'{entry.name}' is a local entry — skipped"
@@ -67,7 +69,7 @@ def _pin_entry(entry: Entry, manifest: Manifest, repo_root: Path) -> str:
         raise ManifestError(f"'{entry.name}' is not locked — run `skillfile install` first")
 
     if strategy.is_dir_entry(entry):
-        return _pin_dir_entry(entry, manifest, repo_root)
+        return _pin_dir_entry(entry, manifest, repo_root, dry_run=dry_run)
 
     # Single-file: read from vendor cache (local, no network)
     vdir = vendor_dir_for(entry, repo_root)
@@ -77,7 +79,7 @@ def _pin_entry(entry: Entry, manifest: Manifest, repo_root: Path) -> str:
         raise ManifestError(f"'{entry.name}' is not cached — run `skillfile install` first")
 
     dest = installed_path(entry, manifest, repo_root)
-    if not dest.exists() or dest.is_symlink():
+    if not dest.exists():
         raise ManifestError(f"'{entry.name}' is not installed — run `skillfile install` first")
 
     label = f"{entry.name}.md"
@@ -86,17 +88,21 @@ def _pin_entry(entry: Entry, manifest: Manifest, repo_root: Path) -> str:
     if not patch_text:
         return f"'{entry.name}' matches upstream — nothing to pin"
 
-    write_patch(entry, patch_text, repo_root)
-    return f"Pinned '{entry.name}'"
+    if not dry_run:
+        write_patch(entry, patch_text, repo_root)
+    return f"{'Would pin' if dry_run else 'Pinned'} '{entry.name}'"
 
 
 def cmd_pin(args: argparse.Namespace, repo_root: Path) -> None:
+    dry_run = getattr(args, "dry_run", False)
     manifest = parse_manifest(repo_root / MANIFEST_NAME)
     entry = find_entry_in(args.name, manifest)
 
-    result = _pin_entry(entry, manifest, repo_root)
+    result = _pin_entry(entry, manifest, repo_root, dry_run=dry_run)
     if result.startswith("Pinned"):
-        print(result + " — customisations saved to Skillfile.patches/")
+        print(result + " — customisations saved to .skillfile/patches/")
+    elif result.startswith("Would pin"):
+        print(result + " [dry-run]")
     else:
         print(result)
 

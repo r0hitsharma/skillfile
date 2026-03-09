@@ -180,3 +180,39 @@ def test_custom_protocol_adapter():
             return {}
 
     assert isinstance(ApiAdapter(), PlatformAdapter)
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — Patch key contract (#6)
+# ---------------------------------------------------------------------------
+
+
+def test_deploy_entry_single_file_key_matches_patch_convention(tmp_path):
+    """deploy_entry for single-file entries must return {name}.md as key."""
+    from skillfile.core.models import Entry, InstallOptions
+
+    adapter = ADAPTERS["claude-code"]
+    source_dir = tmp_path / ".skillfile" / "cache" / "agents" / "test"
+    source_dir.mkdir(parents=True)
+    (source_dir / "agent.md").write_text("# Agent\n")
+    source = source_dir / "agent.md"
+
+    entry = Entry("github", "agent", "test", owner_repo="o/r", path_in_repo="agents/agent.md", ref="main")
+    result = adapter.deploy_entry(entry, source, "local", tmp_path, InstallOptions())
+    assert "test.md" in result, f"Single-file key must be 'test.md', got {list(result.keys())}"
+
+
+def test_deploy_entry_dir_keys_match_source_relative_paths(tmp_path):
+    """deploy_entry for dir entries must return keys relative to the source dir."""
+    from skillfile.core.models import Entry, InstallOptions
+
+    adapter = ADAPTERS["claude-code"]
+    source_dir = tmp_path / ".skillfile" / "cache" / "skills" / "my-skill"
+    source_dir.mkdir(parents=True)
+    (source_dir / "SKILL.md").write_text("# Skill\n")
+    (source_dir / "examples.md").write_text("# Examples\n")
+
+    entry = Entry("github", "skill", "my-skill", owner_repo="o/r", path_in_repo="skills/my-skill", ref="main")
+    result = adapter.deploy_entry(entry, source_dir, "local", tmp_path, InstallOptions())
+    assert "SKILL.md" in result
+    assert "examples.md" in result

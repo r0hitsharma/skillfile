@@ -106,7 +106,7 @@ def sorted_manifest_text(manifest, raw_text: str = "") -> str:
 def cmd_sort(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     manifest = parse_manifest(manifest_path)
     raw_text = manifest_path.read_text()

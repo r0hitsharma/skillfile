@@ -48,6 +48,8 @@ def _get(url: str) -> bytes:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read()
     except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise NetworkError(f"HTTP 404: {url} not found — check that the path exists in the upstream repo") from e
         raise NetworkError(f"HTTP {e.code} fetching {url}") from e
     except urllib.error.URLError as e:
         raise NetworkError(f"{e.reason} fetching {url}") from e

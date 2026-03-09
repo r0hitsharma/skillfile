@@ -37,7 +37,6 @@ def main() -> None:
 
     install_p = sub.add_parser("install", help="Fetch entries and deploy to platform directories")
     install_p.add_argument("--dry-run", action="store_true", help="Show planned actions without fetching or installing")
-    install_p.add_argument("--link", action="store_true", help="Symlink files instead of copying")
     install_p.add_argument("--update", action="store_true", help="Re-resolve all refs and update the lock")
 
     # add — subcommand per source type for discoverability
@@ -71,6 +70,7 @@ def main() -> None:
 
     pin_p = sub.add_parser("pin", help="Capture your edits to an installed entry so they survive upstream updates")
     pin_p.add_argument("name", help="Entry name to pin")
+    pin_p.add_argument("--dry-run", action="store_true", help="Show what would be pinned without writing")
 
     unpin_p = sub.add_parser("unpin", help="Discard pinned customisations and restore pure upstream on next install")
     unpin_p.add_argument("name", help="Entry name to unpin")
@@ -79,7 +79,8 @@ def main() -> None:
     diff_p.add_argument("name", help="Entry name")
 
     resolve_p = sub.add_parser("resolve", help="Merge upstream changes with your customisations after a conflict")
-    resolve_p.add_argument("name", help="Entry name to resolve")
+    resolve_p.add_argument("name", nargs="?", help="Entry name to resolve")
+    resolve_p.add_argument("--abort", action="store_true", help="Clear pending conflict state without merging")
 
     args = parser.parse_args()
     if args.command is None:

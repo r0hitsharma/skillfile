@@ -4,6 +4,32 @@ All notable changes to skillfile are documented here.
 
 ---
 
+## v0.9.0 — 2026-03-09
+
+### Added
+
+- **`skillfile pin --dry-run`** — preview what would be pinned without writing patches
+- **`skillfile resolve --abort`** — clear pending conflict state without merging (escape hatch if you kill the editor mid-resolve)
+- Quoted fields in the Skillfile — paths with spaces now work: `github skill "path with spaces/foo.md"`
+- Inline comments — `github skill owner/repo path  # my note` now works correctly
+- Duplicate entry name warnings during parsing
+- Orphaned lock entry detection in `validate`
+- Duplicate install target detection in `validate`
+
+### Changed
+
+- **Symlink mode removed** — `--link` flag is gone; all installs are now copy-only. This simplifies the patch system and the upcoming Rust rewrite.
+- Lock file keys are now sorted deterministically (no more spurious git diffs when entries sync in different order)
+- Better error on upstream 404 — now suggests checking that the path exists in the repo
+- "Skillfile not found" errors now suggest running `skillfile init`
+- Conflict errors now include SHA context and mention `resolve --abort`
+- Entry names validated as filesystem-safe (`[a-zA-Z0-9._-]` only)
+- Install scope validated (`global` or `local` only — unknown scopes now error instead of silently defaulting)
+- UTF-8 BOM handling — Skillfiles saved with a byte order mark (common on Windows) now parse correctly
+- Binary files in directory entries no longer crash sync
+
+---
+
 ## v0.8.0 — 2026-03-09
 
 ### Changed

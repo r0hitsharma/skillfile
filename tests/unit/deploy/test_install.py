@@ -72,15 +72,6 @@ def test_place_file_copy(tmp_path):
     assert dest.read_text() == "# Source\n"
 
 
-def test_place_file_link(tmp_path):
-    """_place_file creates a symlink in link mode."""
-    src = tmp_path / "source.md"
-    src.write_text("# Source\n")
-    dest = tmp_path / "dest" / "target.md"
-    assert _place_file(src, dest, is_dir=False, opts=InstallOptions(link_mode=True)) is True
-    assert dest.is_symlink()
-
-
 def test_place_file_skip_existing(tmp_path):
     """_place_file with overwrite=False skips existing regular files."""
     src = tmp_path / "source.md"

@@ -41,3 +41,17 @@ def test_roundtrip(tmp_path):
     write_lock(tmp_path, locked)
     result = read_lock(tmp_path)
     assert result == locked
+
+
+def test_write_lock_sorted_keys(tmp_path):
+    """Lock file keys must be sorted for deterministic git diffs."""
+    locked = {
+        "github/skill/zebra": LockEntry(sha="aaa", raw_url="https://example.com/z.md"),
+        "github/agent/alpha": LockEntry(sha="bbb", raw_url="https://example.com/a.md"),
+    }
+    write_lock(tmp_path, locked)
+    content = (tmp_path / "Skillfile.lock").read_text()
+    # Keys must appear in sorted order
+    alpha_pos = content.index("alpha")
+    zebra_pos = content.index("zebra")
+    assert alpha_pos < zebra_pos

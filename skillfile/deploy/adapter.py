@@ -74,8 +74,12 @@ class PlatformAdapter(Protocol):
         """Deploy source to the platform directory.
 
         Returns {relative_key: installed_path} for downstream patch application.
-        Keys match the relative keys used in Skillfile.patches/ so patch lookups
-        work without the caller knowing anything about the deploy layout.
+
+        CONTRACT: Keys MUST match the relative paths used in .skillfile/patches/
+        so patch lookups work without the caller knowing anything about the deploy
+        layout. For single-file entries, the key is "{name}.md". For directory
+        entries, keys are paths relative to the source directory.
+
         Returns an empty dict when nothing was written (dry-run, skipped).
         """
         ...
@@ -95,26 +99,23 @@ class PlatformAdapter(Protocol):
 
 
 def _place_file(source: Path, dest: Path, is_dir: bool, opts: InstallOptions) -> bool:
-    """Copy or symlink source to dest. Returns True if placed, False if skipped."""
+    """Copy source to dest. Returns True if placed, False if skipped."""
     if not opts.overwrite and not opts.dry_run:
-        if is_dir and dest.is_dir() and not dest.is_symlink():
+        if is_dir and dest.is_dir():
             return False
-        if not is_dir and dest.is_file() and not dest.is_symlink():
+        if not is_dir and dest.is_file():
             return False
 
     label = f"  {source.name} -> {dest}"
     if opts.dry_run:
-        print(f"{label} [{'link' if opts.link_mode else 'copy'}, dry-run]")
+        print(f"{label} [copy, dry-run]")
         return True
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() or dest.is_symlink():
-        shutil.rmtree(dest) if (dest.is_dir() and not dest.is_symlink()) else dest.unlink()
+        shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
 
-    if opts.link_mode:
-        dest.symlink_to(source.resolve())
-    else:
-        shutil.copytree(source, dest) if is_dir else shutil.copy2(source, dest)
+    shutil.copytree(source, dest) if is_dir else shutil.copy2(source, dest)
 
     print(label)
     return True
@@ -202,20 +203,17 @@ class FileSystemAdapter:
         md_files = sorted(source_dir.rglob("*.md"))
         if opts.dry_run:
             for src in md_files:
-                print(f"  {src.name} -> {target_dir / src.name} [{'link' if opts.link_mode else 'copy'}, dry-run]")
+                print(f"  {src.name} -> {target_dir / src.name} [copy, dry-run]")
             return {}
         target_dir.mkdir(parents=True, exist_ok=True)
         result: dict[str, Path] = {}
         for src in md_files:
             dest = target_dir / src.name
-            if not opts.overwrite and dest.is_file() and not dest.is_symlink():
+            if not opts.overwrite and dest.is_file():
                 continue
-            if dest.exists() or dest.is_symlink():
+            if dest.exists():
                 dest.unlink()
-            if opts.link_mode:
-                dest.symlink_to(src.resolve())
-            else:
-                shutil.copy2(src, dest)
+            shutil.copy2(src, dest)
             print(f"  {src.name} -> {dest}")
             result[str(src.relative_to(source_dir))] = dest
         return result

@@ -121,7 +121,7 @@ def _resolve_single_file(entry, manifest, conflict, repo_root: Path) -> None:
     patch_text = generate_patch(theirs, merged, filename)
     if patch_text:
         write_patch(entry, patch_text, repo_root)
-        print(f"  updated Skillfile.patches/ for '{entry.name}'")
+        print(f"  updated .skillfile/patches/ for '{entry.name}'")
     else:
         remove_patch(entry, repo_root)
         print(f"  merged result matches upstream — removed pin for '{entry.name}'")
@@ -197,7 +197,7 @@ def _resolve_dir_entry(entry, manifest, conflict, repo_root: Path) -> None:
 
     pinned = [f for f in merged_results if generate_patch(theirs_files.get(f, ""), merged_results[f], f)]
     if pinned:
-        print(f"  updated Skillfile.patches/ for '{entry.name}' ({', '.join(pinned)})")
+        print(f"  updated .skillfile/patches/ for '{entry.name}' ({', '.join(pinned)})")
     else:
         print(f"  merged result matches upstream — no pin needed for '{entry.name}'")
 
@@ -206,6 +206,17 @@ def _resolve_dir_entry(entry, manifest, conflict, repo_root: Path) -> None:
 
 
 def cmd_resolve(args: argparse.Namespace, repo_root: Path) -> None:
+    abort = getattr(args, "abort", False)
+
+    if abort:
+        conflict = read_conflict(repo_root)
+        if conflict is None:
+            print("No pending conflict to abort.")
+            return
+        clear_conflict(repo_root)
+        print(f"Conflict for '{conflict.entry}' cleared. Run `skillfile install` to continue.")
+        return
+
     manifest = parse_manifest(repo_root / MANIFEST_NAME)
     entry = find_entry(args.name, repo_root / MANIFEST_NAME)
 

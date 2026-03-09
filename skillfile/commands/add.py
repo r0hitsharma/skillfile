@@ -22,7 +22,7 @@ def _format_line(entry: Entry) -> str:
 def cmd_add(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     source_type = args.add_source
     if source_type not in STRATEGIES:

@@ -67,7 +67,7 @@ class SourceStrategy(Protocol):
         """Re-fetch the upstream file at the given SHA and return its text content."""
         ...
 
-    def fetch_dir_files(self, entry: Entry, sha: str) -> dict[str, str]:
+    def fetch_dir_files(self, entry: Entry, sha: str) -> dict[str, str | bytes]:
         """Re-fetch all files for a dir entry at the given SHA. Returns {filename: content}."""
         ...
 
@@ -84,21 +84,30 @@ class SourceStrategy(Protocol):
         ...
 
 
-def _fetch_files_parallel(files: list[dict]) -> dict[str, str]:
+def _decode_safe(raw: bytes) -> str | bytes:
+    """Decode bytes as UTF-8 text; return raw bytes for binary files."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw
+
+
+def _fetch_files_parallel(files: list[dict]) -> dict[str, str | bytes]:
     """Fetch multiple files in parallel using threads.
 
     files: list of dicts with 'relative_path' and 'download_url'.
-    Returns {relative_path: decoded_content}.
+    Returns {relative_path: decoded_content_or_bytes}.
+    Text files are decoded as UTF-8 strings; binary files stay as bytes.
     """
     if not files:
         return {}
 
     if len(files) == 1:
         f = files[0]
-        return {f["relative_path"]: _get(f["download_url"]).decode()}
+        return {f["relative_path"]: _decode_safe(_get(f["download_url"]))}
 
-    def _fetch_one(f: dict) -> tuple[str, str]:
-        return f["relative_path"], _get(f["download_url"]).decode()
+    def _fetch_one(f: dict) -> tuple[str, str | bytes]:
+        return f["relative_path"], _decode_safe(_get(f["download_url"]))
 
     with ThreadPoolExecutor(max_workers=len(files)) as pool:
         results = list(pool.map(_fetch_one, files))
@@ -156,7 +165,7 @@ class GithubStrategy:
     def fetch_original(self, entry: Entry, sha: str) -> str:
         return fetch_github_file(entry.owner_repo, entry.path_in_repo, sha).decode()
 
-    def fetch_dir_files(self, entry: Entry, sha: str) -> dict[str, str]:
+    def fetch_dir_files(self, entry: Entry, sha: str) -> dict[str, str | bytes]:
         files = list_github_dir_recursive(entry.owner_repo, entry.path_in_repo, sha)
         return _fetch_files_parallel(files)
 
@@ -197,7 +206,10 @@ class GithubStrategy:
             for relative_path, content in fetched.items():
                 dest = vdir / relative_path
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(content)
+                if isinstance(content, bytes):
+                    dest.write_bytes(content)
+                else:
+                    dest.write_text(content)
             print(f"-> {vdir}/ ({len(fetched)} files)")
             return f"https://api.github.com/repos/{entry.owner_repo}/contents/{entry.path_in_repo}?ref={sha}"
 

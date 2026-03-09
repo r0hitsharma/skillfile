@@ -56,7 +56,7 @@ def read_patch(entry: Entry, repo_root: Path) -> str:
 
 def dir_patch_path(entry: Entry, filename: str, repo_root: Path) -> Path:
     """Path for a per-file patch within a directory entry.
-    e.g. Skillfile.patches/skills/architecture-patterns/SKILL.md.patch
+    e.g. .skillfile/patches/skills/architecture-patterns/SKILL.md.patch
     """
     return patches_root(repo_root) / f"{entry.entity_type}s" / entry.name / f"{filename}.patch"
 

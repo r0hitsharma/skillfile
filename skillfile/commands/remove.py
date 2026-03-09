@@ -23,7 +23,7 @@ def _name_from_parts(parts: list[str]) -> str | None:
 def cmd_remove(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     name = args.name
     manifest = parse_manifest(manifest_path)

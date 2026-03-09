@@ -197,3 +197,27 @@ def test_resolve_existing_pin_replaced_after_resolve(tmp_path):
     # Patch should now reflect merge of YOURS into THEIRS, not the old one
     assert has_patch(entry, tmp_path)
     assert not has_conflict(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — resolve --abort (#11)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_abort_clears_conflict(tmp_path, capsys):
+    write_manifest(tmp_path, "install claude-code local\ngithub agent test-agent owner/repo agents/test.md\n")
+    setup_conflict(tmp_path)
+    assert has_conflict(tmp_path)
+
+    args = argparse.Namespace(name=None, abort=True)
+    cmd_resolve(args, tmp_path)
+
+    assert not has_conflict(tmp_path)
+    assert "cleared" in capsys.readouterr().out.lower()
+
+
+def test_resolve_abort_no_conflict(tmp_path, capsys):
+    args = argparse.Namespace(name=None, abort=True)
+    cmd_resolve(args, tmp_path)
+
+    assert "no pending conflict" in capsys.readouterr().out.lower()

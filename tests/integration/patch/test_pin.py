@@ -29,8 +29,8 @@ MODIFIED = textwrap.dedent("""\
 SHA = "a" * 40
 
 
-def make_args(name: str) -> argparse.Namespace:
-    return argparse.Namespace(name=name)
+def make_args(name: str, dry_run: bool = False) -> argparse.Namespace:
+    return argparse.Namespace(name=name, dry_run=dry_run)
 
 
 def setup_lock(tmp_path, entry, sha: str = SHA) -> None:
@@ -195,6 +195,31 @@ def test_pin_nothing_when_matches_upstream(tmp_path, capsys):
 
     assert not has_patch(entry, tmp_path)
     assert "nothing to pin" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# cmd_unpin
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — pin --dry-run (#15)
+# ---------------------------------------------------------------------------
+
+
+def test_pin_dry_run_does_not_write_patch(tmp_path, capsys):
+    write_manifest(tmp_path, "install claude-code local\ngithub agent test-agent owner/repo agents/test.md\n")
+    entry = make_github_entry()
+    setup_lock(tmp_path, entry)
+    setup_vendor_cache(tmp_path, "test-agent", ORIGINAL)
+    setup_installed(tmp_path, "test-agent", MODIFIED)
+
+    cmd_pin(make_args("test-agent", dry_run=True), tmp_path)
+
+    assert not has_patch(entry, tmp_path)
+    out = capsys.readouterr().out
+    assert "Would pin" in out
+    assert "dry-run" in out
 
 
 # ---------------------------------------------------------------------------

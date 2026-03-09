@@ -2,6 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from skillfile.core.lock import lock_key, read_lock
 from skillfile.core.parser import MANIFEST_NAME, parse_manifest
 from skillfile.deploy.adapter import ADAPTERS
 from skillfile.exceptions import ManifestError
@@ -10,7 +11,7 @@ from skillfile.exceptions import ManifestError
 def cmd_validate(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     # parse_manifest already emits warnings for malformed lines.
     manifest = parse_manifest(manifest_path)
@@ -35,6 +36,22 @@ def cmd_validate(args: argparse.Namespace, repo_root: Path) -> None:
     for target in manifest.install_targets:
         if target.adapter not in ADAPTERS:
             errors.append(f"unknown platform: '{target.adapter}'")
+
+    # Duplicate install targets.
+    seen_targets: set[tuple[str, str]] = set()
+    for target in manifest.install_targets:
+        key = (target.adapter, target.scope)
+        if key in seen_targets:
+            errors.append(f"duplicate install target: '{target.adapter} {target.scope}'")
+        else:
+            seen_targets.add(key)
+
+    # Orphaned lock entries (lock key has no matching manifest entry).
+    locked = read_lock(repo_root)
+    manifest_keys = {lock_key(e) for e in manifest.entries}
+    for key in sorted(locked):
+        if key not in manifest_keys:
+            errors.append(f"orphaned lock entry: '{key}' (not in Skillfile)")
 
     if errors:
         for msg in errors:

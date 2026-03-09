@@ -113,7 +113,7 @@ def install_entry(
     is_dir = STRATEGIES[entry.source_type].is_dir_entry(entry)
     installed = adapter.deploy_entry(entry, source, target.scope, repo_root, opts)
 
-    if installed and not opts.dry_run and not opts.link_mode:
+    if installed and not opts.dry_run:
         if is_dir:
             _apply_dir_patches(entry, installed, source, repo_root)
         else:
@@ -149,7 +149,7 @@ def _auto_pin_entry(entry: Entry, manifest: Manifest, repo_root: Path, locked: d
         return
 
     dest = installed_path(entry, manifest, repo_root)
-    if not dest.exists() or dest.is_symlink():
+    if not dest.exists():
         return
 
     cache_text = cache_file.read_text()
@@ -172,7 +172,7 @@ def _auto_pin_entry(entry: Entry, manifest: Manifest, repo_root: Path, locked: d
     patch_text = generate_patch(cache_text, installed_text, f"{entry.name}.md")
     if patch_text:
         write_patch(entry, patch_text, repo_root)
-        print(f"  {entry.name}: local changes auto-saved to Skillfile.patches/")
+        print(f"  {entry.name}: local changes auto-saved to .skillfile/patches/")
 
 
 def _auto_pin_dir_entry(entry: Entry, manifest: Manifest, repo_root: Path, vdir: Path) -> None:
@@ -190,7 +190,7 @@ def _auto_pin_dir_entry(entry: Entry, manifest: Manifest, repo_root: Path, vdir:
             continue
         filename = str(cache_file.relative_to(vdir))
         inst_path = installed.get(filename)
-        if inst_path is None or not inst_path.exists() or inst_path.is_symlink():
+        if inst_path is None or not inst_path.exists():
             continue
         cache_text = cache_file.read_text()
         installed_text = inst_path.read_text()
@@ -209,7 +209,7 @@ def _auto_pin_dir_entry(entry: Entry, manifest: Manifest, repo_root: Path, vdir:
             pinned.append(filename)
 
     if pinned:
-        print(f"  {entry.name}: local changes auto-saved to Skillfile.patches/ ({', '.join(pinned)})")
+        print(f"  {entry.name}: local changes auto-saved to .skillfile/patches/ ({', '.join(pinned)})")
 
 
 # ---------------------------------------------------------------------------
@@ -261,24 +261,28 @@ def _deploy_all(
                         new_sha=new_sha,
                     ),
                 )
+                sha_info = ""
+                if old_sha and new_sha and old_sha != new_sha:
+                    sha_info = f"\n  upstream: {old_sha[:12]} → {new_sha[:12]}"
                 raise InstallError(
-                    f"upstream changes to '{entry.name}' conflict with your customisations.\n"
+                    f"upstream changes to '{entry.name}' conflict with your customisations.{sha_info}\n"
+                    f"Your pinned edits could not be applied to the new upstream version.\n"
                     f"Run `skillfile diff {entry.name}` to review what changed upstream.\n"
-                    f"Run `skillfile resolve {entry.name}` when ready to merge."
+                    f"Run `skillfile resolve {entry.name}` when ready to merge.\n"
+                    f"Run `skillfile resolve --abort` to discard the conflict and keep the old version."
                 )
 
 
 def cmd_install(args: argparse.Namespace, repo_root: Path) -> None:
     manifest_path = repo_root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}")
+        raise ManifestError(f"{MANIFEST_NAME} not found in {repo_root}. Create one and run `skillfile init`.")
 
     manifest = parse_manifest(manifest_path)
     _check_preconditions(manifest, repo_root)
 
     dry_run = getattr(args, "dry_run", False)
     update = getattr(args, "update", False)
-    link_mode = getattr(args, "link", False)
 
     locked = read_lock(repo_root)
     old_locked = dict(locked)
@@ -295,7 +299,7 @@ def cmd_install(args: argparse.Namespace, repo_root: Path) -> None:
         write_lock(repo_root, locked)
 
     # Deploy to all configured platform targets.
-    opts = InstallOptions(link_mode=link_mode, dry_run=dry_run, overwrite=update)
+    opts = InstallOptions(dry_run=dry_run, overwrite=update)
     _deploy_all(manifest, repo_root, opts, locked, old_locked)
 
     if not dry_run:

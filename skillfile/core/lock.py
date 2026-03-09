@@ -21,4 +21,4 @@ def read_lock(repo_root: Path) -> dict[str, LockEntry]:
 def write_lock(repo_root: Path, locked: dict[str, LockEntry]) -> None:
     lock_path = repo_root / LOCK_NAME
     data = {key: {"sha": e.sha, "raw_url": e.raw_url} for key, e in locked.items()}
-    lock_path.write_text(json.dumps(data, indent=2) + "\n")
+    lock_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
