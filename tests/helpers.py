@@ -3,7 +3,7 @@
 import textwrap
 from pathlib import Path
 
-from skillfile.models import Entry
+from skillfile.core.models import Entry
 
 
 def write_manifest(tmp_path: Path, content: str = "") -> Path:
