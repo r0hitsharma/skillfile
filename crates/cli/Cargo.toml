@@ -1,0 +1,26 @@
+[package]
+name = "skillfile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Tool-agnostic AI skill & agent manager — the Brewfile for your AI tooling"
+
+[[bin]]
+name = "skillfile"
+path = "src/main.rs"
+
+[dependencies]
+skillfile-core = { workspace = true }
+skillfile-sources = { workspace = true }
+skillfile-deploy = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+similar = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }

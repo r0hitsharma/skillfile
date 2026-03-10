@@ -1,0 +1,16 @@
+[package]
+name = "skillfile-sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source fetching and caching for skillfile: resolver, strategies, sync"
+
+[dependencies]
+skillfile-core = { workspace = true }
+ureq = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
