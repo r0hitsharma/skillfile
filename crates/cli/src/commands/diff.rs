@@ -4,7 +4,7 @@ use std::path::Path;
 use skillfile_core::conflict::read_conflict;
 use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock};
-use skillfile_core::models::Entry;
+use skillfile_core::models::{short_sha, Entry};
 use skillfile_core::parser::{find_entry_in, parse_manifest, MANIFEST_NAME};
 use skillfile_deploy::paths::{installed_dir_files, installed_path};
 use skillfile_sources::strategy::{content_file, is_dir_entry};
@@ -45,11 +45,7 @@ fn diff_local_single(entry: &Entry, sha: &str, repo_root: &Path) -> Result<(), S
     let formatted = format!(
         "{}",
         diff_text.unified_diff().context_radius(3).header(
-            &format!(
-                "a/{}.md (upstream sha={})",
-                entry.name,
-                &sha[..sha.len().min(12)]
-            ),
+            &format!("a/{}.md (upstream sha={})", entry.name, short_sha(sha)),
             &format!("b/{}.md (installed)", entry.name),
         )
     );
@@ -113,7 +109,7 @@ fn diff_local_dir(entry: &Entry, sha: &str, repo_root: &Path) -> Result<(), Skil
                 &format!(
                     "a/{}/{filename} (upstream sha={})",
                     entry.name,
-                    &sha[..sha.len().min(12)]
+                    short_sha(sha)
                 ),
                 &format!("b/{}/{filename} (installed)", entry.name),
             )
@@ -175,7 +171,7 @@ fn diff_conflict(
     // This requires network access
     eprintln!(
         "  fetching upstream at old sha={} ...",
-        &conflict.old_sha[..conflict.old_sha.len().min(12)]
+        short_sha(&conflict.old_sha)
     );
     let client = skillfile_sources::http::UreqClient::new();
 
@@ -196,7 +192,7 @@ fn diff_conflict_single(
     eprintln!("done");
     eprintln!(
         "  fetching upstream at new sha={} ...",
-        &conflict.new_sha[..conflict.new_sha.len().min(12)]
+        short_sha(&conflict.new_sha)
     );
     let new_content = skillfile_sources::sync::fetch_file_at_sha(client, entry, &conflict.new_sha)?;
     eprintln!("done\n");
@@ -208,12 +204,12 @@ fn diff_conflict_single(
             &format!(
                 "{}.md (old upstream sha={})",
                 entry.name,
-                &conflict.old_sha[..conflict.old_sha.len().min(12)]
+                short_sha(&conflict.old_sha)
             ),
             &format!(
                 "{}.md (new upstream sha={})",
                 entry.name,
-                &conflict.new_sha[..conflict.new_sha.len().min(12)]
+                short_sha(&conflict.new_sha)
             ),
         )
     );
@@ -237,7 +233,7 @@ fn diff_conflict_dir(
     eprintln!("done");
     eprintln!(
         "  fetching upstream at new sha={} ...",
-        &conflict.new_sha[..conflict.new_sha.len().min(12)]
+        short_sha(&conflict.new_sha)
     );
     let new_files = skillfile_sources::sync::fetch_dir_at_sha(client, entry, &conflict.new_sha)?;
     eprintln!("done\n");
@@ -265,12 +261,12 @@ fn diff_conflict_dir(
                 &format!(
                     "{}/{filename} (old upstream sha={})",
                     entry.name,
-                    &conflict.old_sha[..conflict.old_sha.len().min(12)]
+                    short_sha(&conflict.old_sha)
                 ),
                 &format!(
                     "{}/{filename} (new upstream sha={})",
                     entry.name,
-                    &conflict.new_sha[..conflict.new_sha.len().min(12)]
+                    short_sha(&conflict.new_sha)
                 ),
             )
         );

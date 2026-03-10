@@ -8,6 +8,7 @@ use crate::http::HttpClient;
 static TOKEN_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
 /// Discover a GitHub token from environment or `gh` CLI. Cached after first call.
+#[must_use]
 pub fn github_token() -> Option<&'static str> {
     TOKEN_CACHE
         .get_or_init(|| {

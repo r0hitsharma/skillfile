@@ -44,6 +44,7 @@ pub fn installed_dir_files(
 }
 
 /// Resolve the cache or local source path for an entry.
+#[must_use]
 pub fn source_path(entry: &Entry, repo_root: &Path) -> Option<PathBuf> {
     match &entry.source {
         SourceFields::Local { path } => Some(repo_root.join(path)),
@@ -83,7 +84,7 @@ fn first_target(manifest: &Manifest) -> Result<&'static dyn PlatformAdapter, Ski
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skillfile_core::models::InstallTarget;
+    use skillfile_core::models::{EntityType, InstallTarget};
 
     #[test]
     fn resolve_target_dir_global() {
@@ -102,7 +103,7 @@ mod tests {
     #[test]
     fn installed_path_no_targets() {
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -125,7 +126,7 @@ mod tests {
     #[test]
     fn installed_path_unknown_adapter() {
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -149,7 +150,7 @@ mod tests {
     fn installed_path_returns_correct_path() {
         let tmp = tempfile::tempdir().unwrap();
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -171,7 +172,7 @@ mod tests {
     #[test]
     fn installed_dir_files_no_targets() {
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -191,7 +192,7 @@ mod tests {
     fn installed_dir_files_skill_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let entry = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "my-skill".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -218,7 +219,7 @@ mod tests {
     fn installed_dir_files_agent_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "my-agents".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -252,7 +253,7 @@ mod tests {
     fn source_path_local() {
         let tmp = tempfile::tempdir().unwrap();
         let entry = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Local {
                 path: "skills/test.md".into(),
@@ -266,7 +267,7 @@ mod tests {
     fn source_path_github_single() {
         let tmp = tempfile::tempdir().unwrap();
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),

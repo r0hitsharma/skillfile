@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::SkillfileError;
-use crate::models::{Entry, InstallTarget, Manifest, Scope, SourceFields, DEFAULT_REF};
+use crate::models::{EntityType, Entry, InstallTarget, Manifest, Scope, SourceFields, DEFAULT_REF};
 
 pub const MANIFEST_NAME: &str = "Skillfile";
 const KNOWN_SOURCES: &[&str] = &["github", "local", "url"];
@@ -15,6 +15,7 @@ pub struct ParseResult {
 }
 
 /// Infer an entry name from a path or URL (filename stem).
+#[must_use]
 pub fn infer_name(path_or_url: &str) -> String {
     let p = std::path::Path::new(path_or_url);
     match p.file_stem().and_then(|s| s.to_str()) {
@@ -69,7 +70,11 @@ fn strip_inline_comment(parts: Vec<String>) -> Vec<String> {
 }
 
 /// Parse a github entry line. parts[0]=source_type, parts[1]=entity_type, etc.
-fn parse_github_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<String>) {
+fn parse_github_entry(
+    parts: &[String],
+    entity_type: EntityType,
+    lineno: usize,
+) -> (Option<Entry>, Vec<String>) {
     let mut warnings = Vec::new();
 
     // Detection: if parts[2] contains '/' → it's owner/repo (inferred name)
@@ -90,7 +95,7 @@ fn parse_github_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<St
         let name = infer_name(path_in_repo);
         (
             Some(Entry {
-                entity_type: parts[1].clone(),
+                entity_type,
                 name,
                 source: SourceFields::Github {
                     owner_repo: owner_repo.clone(),
@@ -117,7 +122,7 @@ fn parse_github_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<St
         };
         (
             Some(Entry {
-                entity_type: parts[1].clone(),
+                entity_type,
                 name: name.clone(),
                 source: SourceFields::Github {
                     owner_repo: owner_repo.clone(),
@@ -131,7 +136,11 @@ fn parse_github_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<St
 }
 
 /// Parse a local entry line.
-fn parse_local_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<String>) {
+fn parse_local_entry(
+    parts: &[String],
+    entity_type: EntityType,
+    lineno: usize,
+) -> (Option<Entry>, Vec<String>) {
     let mut warnings = Vec::new();
 
     // Detection: if parts[2] ends in ".md" or contains '/' → path (inferred name)
@@ -140,7 +149,7 @@ fn parse_local_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<Str
         let name = infer_name(local_path);
         (
             Some(Entry {
-                entity_type: parts[1].clone(),
+                entity_type,
                 name,
                 source: SourceFields::Local {
                     path: local_path.clone(),
@@ -159,7 +168,7 @@ fn parse_local_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<Str
         let local_path = &parts[3];
         (
             Some(Entry {
-                entity_type: parts[1].clone(),
+                entity_type,
                 name: name.clone(),
                 source: SourceFields::Local {
                     path: local_path.clone(),
@@ -171,7 +180,11 @@ fn parse_local_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<Str
 }
 
 /// Parse a url entry line.
-fn parse_url_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<String>) {
+fn parse_url_entry(
+    parts: &[String],
+    entity_type: EntityType,
+    lineno: usize,
+) -> (Option<Entry>, Vec<String>) {
     let mut warnings = Vec::new();
 
     // Detection: if parts[2] starts with "http" → URL (inferred name)
@@ -180,7 +193,7 @@ fn parse_url_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<Strin
         let name = infer_name(url);
         (
             Some(Entry {
-                entity_type: parts[1].clone(),
+                entity_type,
                 name,
                 source: SourceFields::Url { url: url.clone() },
             }),
@@ -195,7 +208,7 @@ fn parse_url_entry(parts: &[String], lineno: usize) -> (Option<Entry>, Vec<Strin
         let url = &parts[3];
         (
             Some(Entry {
-                entity_type: parts[1].clone(),
+                entity_type,
                 name: name.clone(),
                 source: SourceFields::Url { url: url.clone() },
             }),
@@ -266,10 +279,22 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ParseResult, SkillfileErro
                 if parts.len() < 3 {
                     warnings.push(format!("warning: line {lineno}: too few fields, skipping"));
                 } else {
+                    // Parse entity type
+                    let entity_type = match EntityType::parse(&parts[1]) {
+                        Some(et) => et,
+                        None => {
+                            warnings.push(format!(
+                                "warning: line {lineno}: unknown entity type '{}', skipping",
+                                parts[1]
+                            ));
+                            continue;
+                        }
+                    };
+
                     let (entry_opt, mut entry_warnings) = match st {
-                        "github" => parse_github_entry(&parts, lineno),
-                        "local" => parse_local_entry(&parts, lineno),
-                        "url" => parse_url_entry(&parts, lineno),
+                        "github" => parse_github_entry(&parts, entity_type, lineno),
+                        "local" => parse_local_entry(&parts, entity_type, lineno),
+                        "url" => parse_url_entry(&parts, entity_type, lineno),
                         _ => unreachable!(),
                     };
                     warnings.append(&mut entry_warnings);
@@ -312,6 +337,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ParseResult, SkillfileErro
 }
 
 /// Try to parse a single manifest line as an entry. Returns `Some(entry)` on success.
+#[must_use]
 pub fn parse_manifest_line(line: &str) -> Option<Entry> {
     let parts = split_line(line);
     let parts = strip_inline_comment(parts);
@@ -322,10 +348,11 @@ pub fn parse_manifest_line(line: &str) -> Option<Entry> {
     if !KNOWN_SOURCES.contains(&source_type) || source_type == "install" {
         return None;
     }
+    let entity_type = EntityType::parse(&parts[1])?;
     let (entry_opt, _) = match source_type {
-        "github" => parse_github_entry(&parts, 0),
-        "local" => parse_local_entry(&parts, 0),
-        "url" => parse_url_entry(&parts, 0),
+        "github" => parse_github_entry(&parts, entity_type, 0),
+        "local" => parse_local_entry(&parts, entity_type, 0),
+        "url" => parse_url_entry(&parts, entity_type, 0),
         _ => return None,
     };
     entry_opt
@@ -387,7 +414,7 @@ mod tests {
         assert_eq!(r.manifest.entries.len(), 1);
         let e = &r.manifest.entries[0];
         assert_eq!(e.source_type(), "github");
-        assert_eq!(e.entity_type, "agent");
+        assert_eq!(e.entity_type, EntityType::Agent);
         assert_eq!(e.name, "backend-dev");
         assert_eq!(e.owner_repo(), "owner/repo");
         assert_eq!(e.path_in_repo(), "path/to/agent.md");
@@ -402,7 +429,7 @@ mod tests {
         assert_eq!(r.manifest.entries.len(), 1);
         let e = &r.manifest.entries[0];
         assert_eq!(e.source_type(), "local");
-        assert_eq!(e.entity_type, "skill");
+        assert_eq!(e.entity_type, EntityType::Skill);
         assert_eq!(e.name, "git-commit");
         assert_eq!(e.local_path(), "skills/git/commit.md");
     }
@@ -774,13 +801,26 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // Unknown entity type warning
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn unknown_entity_type_skipped_with_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_manifest(dir.path(), "local  hook  foo  hooks/foo.md");
+        let r = parse_manifest(&p).unwrap();
+        assert!(r.manifest.entries.is_empty());
+        assert!(r.warnings.iter().any(|w| w.contains("unknown entity type")));
+    }
+
+    // -------------------------------------------------------------------
     // find_entry_in
     // -------------------------------------------------------------------
 
     #[test]
     fn find_entry_in_found() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "foo".into(),
             source: SourceFields::Local {
                 path: "foo.md".into(),

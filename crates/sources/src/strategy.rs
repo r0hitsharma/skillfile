@@ -8,6 +8,7 @@ pub const KNOWN_SOURCES: &[&str] = &["github", "local", "url"];
 
 /// Return the expected filename in the vendor cache directory.
 /// Empty string for directory entries and local entries.
+#[must_use]
 pub fn content_file(entry: &Entry) -> String {
     match &entry.source {
         SourceFields::Github { path_in_repo, .. } => {
@@ -42,6 +43,7 @@ pub fn content_file(entry: &Entry) -> String {
 }
 
 /// Whether an entry represents a directory of files rather than a single file.
+#[must_use]
 pub fn is_dir_entry(entry: &Entry) -> bool {
     match &entry.source {
         SourceFields::Github { path_in_repo, .. } => {
@@ -53,6 +55,7 @@ pub fn is_dir_entry(entry: &Entry) -> bool {
 
 /// Return source-type-specific Skillfile fields (after source_type and entity_type).
 /// Used by `add` and `sort` commands.
+#[must_use]
 pub fn format_parts(entry: &Entry) -> Vec<String> {
     match &entry.source {
         SourceFields::Github {
@@ -91,6 +94,7 @@ pub fn format_parts(entry: &Entry) -> Vec<String> {
 }
 
 /// Read the SHA from a `.meta` file in a vendor directory.
+#[must_use]
 pub fn meta_sha(vdir: &Path) -> Option<String> {
     let meta_path = vdir.join(".meta");
     let text = std::fs::read_to_string(&meta_path).ok()?;
@@ -101,11 +105,11 @@ pub fn meta_sha(vdir: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skillfile_core::models::SourceFields;
+    use skillfile_core::models::{EntityType, SourceFields};
 
     fn github_entry(path_in_repo: &str) -> Entry {
         Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -136,7 +140,7 @@ mod tests {
     #[test]
     fn content_file_local() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Local {
                 path: "skills/test.md".into(),
@@ -148,7 +152,7 @@ mod tests {
     #[test]
     fn content_file_url() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Url {
                 url: "https://example.com/skill.md".into(),
@@ -175,7 +179,7 @@ mod tests {
     #[test]
     fn is_dir_entry_local() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Local {
                 path: "skills/test".into(),
@@ -187,7 +191,7 @@ mod tests {
     #[test]
     fn format_parts_github_inferred_name() {
         let e = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "agent".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -202,7 +206,7 @@ mod tests {
     #[test]
     fn format_parts_github_explicit_name_and_ref() {
         let e = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "my-agent".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -219,7 +223,7 @@ mod tests {
     #[test]
     fn format_parts_local_inferred_name() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "commit".into(),
             source: SourceFields::Local {
                 path: "skills/git/commit.md".into(),
@@ -231,7 +235,7 @@ mod tests {
     #[test]
     fn format_parts_local_explicit_name() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "git-commit".into(),
             source: SourceFields::Local {
                 path: "skills/git/commit.md".into(),

@@ -20,6 +20,7 @@ impl Scope {
     pub const ALL: &[Scope] = &[Scope::Global, Scope::Local];
 
     /// Parse a scope string. Returns `None` for unrecognised values.
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "global" => Some(Scope::Global),
@@ -29,6 +30,7 @@ impl Scope {
     }
 
     /// The canonical string representation (used in Skillfile format).
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Scope::Global => "global",
@@ -41,6 +43,66 @@ impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+// ---------------------------------------------------------------------------
+// EntityType — typed replacement for bare "skill"/"agent" strings
+// ---------------------------------------------------------------------------
+
+/// Entity type: either a skill or an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EntityType {
+    Skill,
+    Agent,
+}
+
+impl EntityType {
+    /// All valid entity type values, in alphabetical order.
+    pub const ALL: &[EntityType] = &[EntityType::Agent, EntityType::Skill];
+
+    /// Parse an entity type string. Returns `None` for unrecognised values.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "skill" => Some(EntityType::Skill),
+            "agent" => Some(EntityType::Agent),
+            _ => None,
+        }
+    }
+
+    /// The canonical string representation (used in Skillfile format).
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EntityType::Skill => "skill",
+            EntityType::Agent => "agent",
+        }
+    }
+
+    /// Pluralized directory name (e.g. "skills", "agents").
+    #[must_use]
+    pub fn dir_name(&self) -> &'static str {
+        match self {
+            EntityType::Skill => "skills",
+            EntityType::Agent => "agents",
+        }
+    }
+}
+
+impl fmt::Display for EntityType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// short_sha — truncate SHA for display
+// ---------------------------------------------------------------------------
+
+/// Return the first 12 characters of a SHA (or the full string if shorter).
+#[must_use]
+pub fn short_sha(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +130,7 @@ pub enum SourceFields {
 
 impl SourceFields {
     /// The source type identifier used in the Skillfile format and lock keys.
+    #[must_use]
     pub fn source_type(&self) -> &str {
         match self {
             SourceFields::Github { .. } => "github",
@@ -77,6 +140,7 @@ impl SourceFields {
     }
 
     /// Access GitHub-specific fields. Returns `None` for non-GitHub sources.
+    #[must_use]
     pub fn as_github(&self) -> Option<(&str, &str, &str)> {
         match self {
             SourceFields::Github {
@@ -89,6 +153,7 @@ impl SourceFields {
     }
 
     /// Access the local path. Returns `None` for non-Local sources.
+    #[must_use]
     pub fn as_local(&self) -> Option<&str> {
         match self {
             SourceFields::Local { path } => Some(path),
@@ -97,6 +162,7 @@ impl SourceFields {
     }
 
     /// Access the URL. Returns `None` for non-Url sources.
+    #[must_use]
     pub fn as_url(&self) -> Option<&str> {
         match self {
             SourceFields::Url { url } => Some(url),
@@ -112,37 +178,42 @@ impl SourceFields {
 /// A single entry in the Skillfile manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    pub entity_type: String,
+    pub entity_type: EntityType,
     pub name: String,
     pub source: SourceFields,
 }
 
 impl Entry {
     /// Shorthand: the source type identifier.
+    #[must_use]
     pub fn source_type(&self) -> &str {
         self.source.source_type()
     }
 
-    // Legacy convenience accessors — delegate to SourceFields.
-    // These return "" for inapplicable variants to keep backward compatibility
-    // with existing callers. Prefer matching on `entry.source` directly.
+    // Legacy convenience accessors — only used in tests.
+    // Prefer matching on `entry.source` directly.
 
+    #[cfg(test)]
     pub fn owner_repo(&self) -> &str {
         self.source.as_github().map(|(or, _, _)| or).unwrap_or("")
     }
 
+    #[cfg(test)]
     pub fn path_in_repo(&self) -> &str {
         self.source.as_github().map(|(_, pir, _)| pir).unwrap_or("")
     }
 
+    #[cfg(test)]
     pub fn ref_(&self) -> &str {
         self.source.as_github().map(|(_, _, r)| r).unwrap_or("")
     }
 
+    #[cfg(test)]
     pub fn local_path(&self) -> &str {
         self.source.as_local().unwrap_or("")
     }
 
+    #[cfg(test)]
     pub fn url(&self) -> &str {
         self.source.as_url().unwrap_or("")
     }
@@ -258,6 +329,41 @@ mod tests {
     }
 
     #[test]
+    fn entity_type_parse_and_display() {
+        assert_eq!(EntityType::parse("skill"), Some(EntityType::Skill));
+        assert_eq!(EntityType::parse("agent"), Some(EntityType::Agent));
+        assert_eq!(EntityType::parse("hook"), None);
+        assert_eq!(EntityType::Skill.to_string(), "skill");
+        assert_eq!(EntityType::Agent.to_string(), "agent");
+        assert_eq!(EntityType::Skill.as_str(), "skill");
+        assert_eq!(EntityType::Agent.as_str(), "agent");
+    }
+
+    #[test]
+    fn entity_type_dir_name() {
+        assert_eq!(EntityType::Skill.dir_name(), "skills");
+        assert_eq!(EntityType::Agent.dir_name(), "agents");
+    }
+
+    #[test]
+    fn entity_type_all_variants() {
+        assert_eq!(EntityType::ALL.len(), 2);
+        assert!(EntityType::ALL.contains(&EntityType::Skill));
+        assert!(EntityType::ALL.contains(&EntityType::Agent));
+    }
+
+    #[test]
+    fn short_sha_truncates() {
+        let sha = "abcdef123456789012345678";
+        assert_eq!(short_sha(sha), "abcdef123456");
+    }
+
+    #[test]
+    fn short_sha_short_input() {
+        assert_eq!(short_sha("abc"), "abc");
+    }
+
+    #[test]
     fn source_fields_typed_accessors() {
         let gh = SourceFields::Github {
             owner_repo: "o/r".into(),
@@ -284,7 +390,7 @@ mod tests {
     #[test]
     fn github_entry_source_type() {
         let e = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -293,7 +399,7 @@ mod tests {
             },
         };
         assert_eq!(e.source_type(), "github");
-        assert_eq!(e.entity_type, "agent");
+        assert_eq!(e.entity_type, EntityType::Agent);
         assert_eq!(e.name, "test");
         assert_eq!(e.owner_repo(), "o/r");
         assert_eq!(e.path_in_repo(), "a.md");
@@ -305,7 +411,7 @@ mod tests {
     #[test]
     fn github_entry_fields() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "my-skill".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -321,7 +427,7 @@ mod tests {
     #[test]
     fn local_entry_fields() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Local {
                 path: "test.md".into(),
@@ -336,7 +442,7 @@ mod tests {
     #[test]
     fn url_entry_fields() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "my-skill".into(),
             source: SourceFields::Url {
                 url: "https://example.com/skill.md".into(),
@@ -350,7 +456,7 @@ mod tests {
     #[test]
     fn entry_display() {
         let e = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -392,7 +498,7 @@ mod tests {
     #[test]
     fn manifest_with_entries() {
         let e = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Local {
                 path: "test.md".into(),

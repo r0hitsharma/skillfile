@@ -3,7 +3,7 @@ use std::process::Command;
 
 use skillfile_core::conflict::{clear_conflict, read_conflict};
 use skillfile_core::error::SkillfileError;
-use skillfile_core::models::ConflictState;
+use skillfile_core::models::{short_sha, ConflictState};
 use skillfile_core::parser::{find_entry_in, parse_manifest, MANIFEST_NAME};
 use skillfile_deploy::paths::{installed_dir_files, installed_path};
 use skillfile_sources::strategy::is_dir_entry;
@@ -103,14 +103,14 @@ fn resolve_single_file(
 
     eprintln!(
         "  fetching upstream at old sha={} (common ancestor) ...",
-        &conflict.old_sha[..conflict.old_sha.len().min(12)]
+        short_sha(&conflict.old_sha)
     );
     let base = fetch_file_at_sha(&client, entry, &conflict.old_sha)?;
     eprintln!("done");
 
     eprintln!(
         "  fetching upstream at new sha={} ...",
-        &conflict.new_sha[..conflict.new_sha.len().min(12)]
+        short_sha(&conflict.new_sha)
     );
     let theirs = fetch_file_at_sha(&client, entry, &conflict.new_sha)?;
     eprintln!("done");
@@ -185,14 +185,14 @@ fn resolve_dir_entry(
 
     eprintln!(
         "  fetching upstream at old sha={} (common ancestor) ...",
-        &conflict.old_sha[..conflict.old_sha.len().min(12)]
+        short_sha(&conflict.old_sha)
     );
     let base_files = fetch_dir_at_sha(&client, entry, &conflict.old_sha)?;
     eprintln!("done");
 
     eprintln!(
         "  fetching upstream at new sha={} ...",
-        &conflict.new_sha[..conflict.new_sha.len().min(12)]
+        short_sha(&conflict.new_sha)
     );
     let theirs_files = fetch_dir_at_sha(&client, entry, &conflict.new_sha)?;
     eprintln!("done");

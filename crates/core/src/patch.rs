@@ -9,6 +9,8 @@ pub const PATCHES_DIR: &str = ".skillfile/patches";
 // Path helpers
 // ---------------------------------------------------------------------------
 
+/// Root directory for all patches: `.skillfile/patches/`.
+#[must_use]
 pub fn patches_root(repo_root: &Path) -> PathBuf {
     repo_root.join(PATCHES_DIR)
 }
@@ -17,14 +19,17 @@ pub fn patches_root(repo_root: &Path) -> PathBuf {
 /// e.g. `.skillfile/patches/agents/my-agent.patch`
 pub fn patch_path(entry: &Entry, repo_root: &Path) -> PathBuf {
     patches_root(repo_root)
-        .join(format!("{}s", entry.entity_type))
+        .join(entry.entity_type.dir_name())
         .join(format!("{}.patch", entry.name))
 }
 
+/// Check whether a single-file patch exists for this entry.
+#[must_use]
 pub fn has_patch(entry: &Entry, repo_root: &Path) -> bool {
     patch_path(entry, repo_root).exists()
 }
 
+/// Write a single-file patch for the given entry.
 pub fn write_patch(
     entry: &Entry,
     patch_text: &str,
@@ -38,11 +43,13 @@ pub fn write_patch(
     Ok(())
 }
 
+/// Read the patch text for a single-file entry.
 pub fn read_patch(entry: &Entry, repo_root: &Path) -> Result<String, SkillfileError> {
     let p = patch_path(entry, repo_root);
     Ok(std::fs::read_to_string(&p)?)
 }
 
+/// Remove the patch file for a single-file entry. No-op if it doesn't exist.
 pub fn remove_patch(entry: &Entry, repo_root: &Path) -> Result<(), SkillfileError> {
     let p = patch_path(entry, repo_root);
     if !p.exists() {
@@ -68,14 +75,16 @@ pub fn remove_patch(entry: &Entry, repo_root: &Path) -> Result<(), SkillfileErro
 /// e.g. `.skillfile/patches/skills/architecture-patterns/SKILL.md.patch`
 pub fn dir_patch_path(entry: &Entry, filename: &str, repo_root: &Path) -> PathBuf {
     patches_root(repo_root)
-        .join(format!("{}s", entry.entity_type))
+        .join(entry.entity_type.dir_name())
         .join(&entry.name)
         .join(format!("{filename}.patch"))
 }
 
+/// Check whether any directory patches exist for this entry.
+#[must_use]
 pub fn has_dir_patch(entry: &Entry, repo_root: &Path) -> bool {
     let d = patches_root(repo_root)
-        .join(format!("{}s", entry.entity_type))
+        .join(entry.entity_type.dir_name())
         .join(&entry.name);
     if !d.is_dir() {
         return false;
@@ -122,7 +131,7 @@ pub fn remove_dir_patch(
 
 pub fn remove_all_dir_patches(entry: &Entry, repo_root: &Path) -> Result<(), SkillfileError> {
     let d = patches_root(repo_root)
-        .join(format!("{}s", entry.entity_type))
+        .join(entry.entity_type.dir_name())
         .join(&entry.name);
     if d.is_dir() {
         std::fs::remove_dir_all(&d)?;
@@ -346,6 +355,8 @@ pub fn apply_patch_pure(original: &str, patch_text: &str) -> Result<String, Skil
 // Directory walking helper
 // ---------------------------------------------------------------------------
 
+/// Recursively list all files under a directory, sorted.
+#[must_use]
 pub fn walkdir(dir: &Path) -> Vec<PathBuf> {
     let mut result = Vec::new();
     walkdir_inner(dir, &mut result);
@@ -373,11 +384,11 @@ fn walkdir_inner(dir: &Path, result: &mut Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::SourceFields;
+    use crate::models::{EntityType, SourceFields};
 
-    fn github_entry(name: &str, entity_type: &str) -> Entry {
+    fn github_entry(name: &str, entity_type: EntityType) -> Entry {
         Entry {
-            entity_type: entity_type.to_string(),
+            entity_type,
             name: name.to_string(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -481,7 +492,7 @@ mod tests {
 
     #[test]
     fn patch_path_single_file_agent() {
-        let entry = github_entry("my-agent", "agent");
+        let entry = github_entry("my-agent", EntityType::Agent);
         let root = Path::new("/repo");
         let p = patch_path(&entry, root);
         assert_eq!(
@@ -492,7 +503,7 @@ mod tests {
 
     #[test]
     fn patch_path_single_file_skill() {
-        let entry = github_entry("my-skill", "skill");
+        let entry = github_entry("my-skill", EntityType::Skill);
         let root = Path::new("/repo");
         let p = patch_path(&entry, root);
         assert_eq!(
@@ -503,7 +514,7 @@ mod tests {
 
     #[test]
     fn dir_patch_path_returns_correct() {
-        let entry = github_entry("lang-pro", "skill");
+        let entry = github_entry("lang-pro", EntityType::Skill);
         let root = Path::new("/repo");
         let p = dir_patch_path(&entry, "python.md", root);
         assert_eq!(
@@ -515,7 +526,7 @@ mod tests {
     #[test]
     fn write_read_remove_patch_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = github_entry("test-agent", "agent");
+        let entry = github_entry("test-agent", EntityType::Agent);
         let patch_text = "--- a/test-agent.md\n+++ b/test-agent.md\n@@ -1 +1 @@\n-old\n+new\n";
         write_patch(&entry, patch_text, dir.path()).unwrap();
         assert!(has_patch(&entry, dir.path()));
@@ -528,7 +539,7 @@ mod tests {
     #[test]
     fn has_dir_patch_detects_patches() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = github_entry("lang-pro", "skill");
+        let entry = github_entry("lang-pro", EntityType::Skill);
         assert!(!has_dir_patch(&entry, dir.path()));
         write_dir_patch(&entry, "python.md", "patch content", dir.path()).unwrap();
         assert!(has_dir_patch(&entry, dir.path()));
@@ -537,7 +548,7 @@ mod tests {
     #[test]
     fn remove_all_dir_patches_clears_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = github_entry("lang-pro", "skill");
+        let entry = github_entry("lang-pro", EntityType::Skill);
         write_dir_patch(&entry, "python.md", "p1", dir.path()).unwrap();
         write_dir_patch(&entry, "typescript.md", "p2", dir.path()).unwrap();
         assert!(has_dir_patch(&entry, dir.path()));

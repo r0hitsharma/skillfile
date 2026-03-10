@@ -7,6 +7,7 @@ use crate::models::{Entry, LockEntry};
 pub const LOCK_NAME: &str = "Skillfile.lock";
 
 /// Generate the lock file key for an entry: `"{source_type}/{entity_type}/{name}"`.
+#[must_use]
 pub fn lock_key(entry: &Entry) -> String {
     format!(
         "{}/{}/{}",
@@ -46,9 +47,9 @@ mod tests {
     use super::*;
 
     fn make_github_entry(name: &str) -> Entry {
-        use crate::models::SourceFields;
+        use crate::models::{EntityType, SourceFields};
         Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: name.into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),

@@ -146,13 +146,13 @@ impl PlatformAdapter for FileSystemAdapter {
         repo_root: &Path,
         opts: &InstallOptions,
     ) -> DeployResult {
-        let target_dir = self.target_dir(&entry.entity_type, scope, repo_root);
+        let target_dir = self.target_dir(entry.entity_type.as_str(), scope, repo_root);
         let is_dir = is_dir_entry(entry);
 
         if is_dir
             && self
                 .entities
-                .get(&entry.entity_type)
+                .get(entry.entity_type.as_str())
                 .is_some_and(|c| c.dir_mode == DirInstallMode::Flat)
         {
             return deploy_flat(source, &target_dir, opts);
@@ -185,7 +185,7 @@ impl PlatformAdapter for FileSystemAdapter {
     }
 
     fn installed_path(&self, entry: &Entry, scope: Scope, repo_root: &Path) -> PathBuf {
-        self.target_dir(&entry.entity_type, scope, repo_root)
+        self.target_dir(entry.entity_type.as_str(), scope, repo_root)
             .join(format!("{}.md", entry.name))
     }
 
@@ -195,10 +195,10 @@ impl PlatformAdapter for FileSystemAdapter {
         scope: Scope,
         repo_root: &Path,
     ) -> HashMap<String, PathBuf> {
-        let target_dir = self.target_dir(&entry.entity_type, scope, repo_root);
+        let target_dir = self.target_dir(entry.entity_type.as_str(), scope, repo_root);
         let mode = self
             .entities
-            .get(&entry.entity_type)
+            .get(entry.entity_type.as_str())
             .map(|c| c.dir_mode)
             .unwrap_or(DirInstallMode::Nested);
 
@@ -478,12 +478,14 @@ fn codex_adapter() -> FileSystemAdapter {
 // ---------------------------------------------------------------------------
 
 /// Get the global adapter registry (lazily initialized).
+#[must_use]
 pub fn adapters() -> &'static AdapterRegistry {
     static REGISTRY: OnceLock<AdapterRegistry> = OnceLock::new();
     REGISTRY.get_or_init(AdapterRegistry::builtin)
 }
 
 /// Sorted list of known adapter names.
+#[must_use]
 pub fn known_adapters() -> Vec<&'static str> {
     adapters().names()
 }
@@ -665,7 +667,7 @@ mod tests {
 
     #[test]
     fn deploy_entry_single_file_key_matches_patch_convention() {
-        use skillfile_core::models::SourceFields;
+        use skillfile_core::models::{EntityType, SourceFields};
 
         let dir = tempfile::tempdir().unwrap();
         let source_dir = dir.path().join(".skillfile/cache/agents/test");
@@ -674,7 +676,7 @@ mod tests {
         let source = source_dir.join("agent.md");
 
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),
@@ -699,7 +701,7 @@ mod tests {
 
     #[test]
     fn deploy_entry_dir_keys_match_source_relative_paths() {
-        use skillfile_core::models::SourceFields;
+        use skillfile_core::models::{EntityType, SourceFields};
 
         let dir = tempfile::tempdir().unwrap();
         let source_dir = dir.path().join(".skillfile/cache/skills/my-skill");
@@ -708,7 +710,7 @@ mod tests {
         std::fs::write(source_dir.join("examples.md"), "# Examples\n").unwrap();
 
         let entry = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "my-skill".into(),
             source: SourceFields::Github {
                 owner_repo: "o/r".into(),

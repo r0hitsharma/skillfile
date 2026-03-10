@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock, write_lock};
-use skillfile_core::models::{Entry, LockEntry, SourceFields};
+use skillfile_core::models::{short_sha, Entry, LockEntry, SourceFields};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
 
 use crate::http::{HttpClient, UreqClient};
@@ -24,10 +24,11 @@ pub struct SyncContext {
 }
 
 /// Compute the vendor cache directory for an entry.
+#[must_use]
 pub fn vendor_dir_for(entry: &Entry, repo_root: &Path) -> PathBuf {
     repo_root
         .join(VENDOR_DIR)
-        .join(format!("{}s", entry.entity_type))
+        .join(entry.entity_type.dir_name())
         .join(&entry.name)
 }
 
@@ -62,13 +63,7 @@ pub fn sync_entry(
 ) -> Result<(), SkillfileError> {
     match &entry.source {
         SourceFields::Local { .. } => {
-            let label = format!(
-                "  {}/{}/{}",
-                entry.source_type(),
-                entry.entity_type,
-                entry.name
-            );
-            eprintln!("{label}: local — skipping");
+            eprintln!("  {entry}: local — skipping");
             Ok(())
         }
         SourceFields::Github { .. } => sync_github(client, entry, ctx, locked),
@@ -82,12 +77,7 @@ fn sync_github(
     ctx: &mut SyncContext,
     locked: &mut BTreeMap<String, LockEntry>,
 ) -> Result<(), SkillfileError> {
-    let label = format!(
-        "  {}/{}/{}",
-        entry.source_type(),
-        entry.entity_type,
-        entry.name
-    );
+    let label = format!("  {entry}");
     let vdir = vendor_dir_for(entry, &ctx.repo_root);
     let key = lock_key(entry);
 
@@ -110,17 +100,14 @@ fn sync_github(
     // Skip if locked SHA matches meta and content exists
     if let Some(ref ls) = locked_sha {
         if meta.as_deref() == Some(ls.as_str()) && has_content {
-            eprintln!("{label}: up to date (sha={})", &ls[..12.min(ls.len())]);
+            eprintln!("{label}: up to date (sha={})", short_sha(ls));
             return Ok(());
         }
     }
 
     // Resolve SHA
     let sha = if let Some(ref ls) = locked_sha {
-        eprint!(
-            "{label}: re-fetching (locked sha={}) ...",
-            &ls[..12.min(ls.len())]
-        );
+        eprint!("{label}: re-fetching (locked sha={}) ...", short_sha(ls));
         ls.clone()
     } else {
         eprint!("{label}: resolving {owner_repo}@{ref_} ...");
@@ -131,11 +118,11 @@ fn sync_github(
         let cache_key = (owner_repo.to_string(), ref_.to_string());
         if let Some(cached) = ctx.sha_cache.get(&cache_key) {
             let sha = cached.clone();
-            eprint!(" sha={} (cached)", &sha[..12.min(sha.len())]);
+            eprint!(" sha={} (cached)", short_sha(&sha));
             sha
         } else {
             let sha = resolve_github_sha(client, owner_repo, ref_)?;
-            eprint!(" sha={}", &sha[..12.min(sha.len())]);
+            eprint!(" sha={}", short_sha(&sha));
             ctx.sha_cache.insert(cache_key, sha.clone());
             sha
         }
@@ -215,12 +202,7 @@ fn sync_url(
     ctx: &SyncContext,
     _locked: &mut BTreeMap<String, LockEntry>,
 ) -> Result<(), SkillfileError> {
-    let label = format!(
-        "  {}/{}/{}",
-        entry.source_type(),
-        entry.entity_type,
-        entry.name
-    );
+    let label = format!("  {entry}");
     let vdir = vendor_dir_for(entry, &ctx.repo_root);
 
     eprint!("{label}: fetching {url} ...");
@@ -316,8 +298,10 @@ pub fn cmd_sync(
     Ok(())
 }
 
-/// Fetch the text content of a single-file github entry at a specific SHA.
+/// Fetch the text content of a single-file GitHub entry at a specific SHA.
 /// Used by `diff` and `resolve` in conflict mode.
+///
+/// Returns the file content as a UTF-8 string, or an error for binary files.
 pub fn fetch_file_at_sha(
     client: &dyn HttpClient,
     entry: &Entry,
@@ -338,8 +322,9 @@ pub fn fetch_file_at_sha(
         .map_err(|_| SkillfileError::Network(format!("binary file at sha {sha}")))
 }
 
-/// Fetch all text files in a directory github entry at a specific SHA.
-/// Returns a map of relative_path -> content.
+/// Fetch all text files in a directory GitHub entry at a specific SHA.
+///
+/// Returns a map of `relative_path -> content`. Binary files are silently skipped.
 /// Used by `diff` and `resolve` in conflict mode.
 pub fn fetch_dir_at_sha(
     client: &dyn HttpClient,

@@ -194,7 +194,7 @@ pub fn cmd_unpin(name: &str, repo_root: &Path) -> Result<(), SkillfileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skillfile_core::models::{InstallTarget, Scope, SourceFields};
+    use skillfile_core::models::{EntityType, InstallTarget, Scope, SourceFields};
 
     fn write_manifest(dir: &Path, content: &str) {
         std::fs::write(dir.join(MANIFEST_NAME), content).unwrap();
@@ -206,7 +206,7 @@ mod tests {
 
     fn github_entry_skill(name: &str, path_in_repo: &str) -> Entry {
         Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: name.to_string(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -240,7 +240,7 @@ mod tests {
         write_manifest(dir.path(), "local  skill  skills/foo.md\n");
 
         let entry = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "foo".into(),
             source: SourceFields::Local {
                 path: "skills/foo.md".into(),
@@ -407,7 +407,7 @@ mod tests {
     fn pin_dir_entry_not_cached_errors() {
         let dir = tempfile::tempdir().unwrap();
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "lang-pro".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),

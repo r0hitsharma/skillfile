@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use skillfile_core::error::SkillfileError;
-use skillfile_core::models::{Entry, Manifest};
+use skillfile_core::models::{EntityType, Entry, Manifest};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
 use skillfile_sources::strategy::format_parts;
 
@@ -23,7 +23,10 @@ fn section_headers(entity_type: &str) -> Vec<&'static str> {
 
 /// Format an entry as a Skillfile line.
 pub fn format_line(entry: &Entry) -> String {
-    let mut parts = vec![entry.source_type().to_string(), entry.entity_type.clone()];
+    let mut parts = vec![
+        entry.source_type().to_string(),
+        entry.entity_type.to_string(),
+    ];
     parts.extend(format_parts(entry));
     parts.join("  ")
 }
@@ -110,14 +113,14 @@ pub fn sorted_manifest_text(manifest: &Manifest, raw_text: &str) -> String {
     let mut agents: Vec<&Entry> = manifest
         .entries
         .iter()
-        .filter(|e| e.entity_type == "agent")
+        .filter(|e| e.entity_type == EntityType::Agent)
         .collect();
     agents.sort_by_key(|e| sort_key(e));
 
     let mut skills: Vec<&Entry> = manifest
         .entries
         .iter()
-        .filter(|e| e.entity_type == "skill")
+        .filter(|e| e.entity_type == EntityType::Skill)
         .collect();
     skills.sort_by_key(|e| sort_key(e));
 

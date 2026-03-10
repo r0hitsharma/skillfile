@@ -2,7 +2,7 @@ use std::path::Path;
 
 use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{read_lock, write_lock};
-use skillfile_core::models::{Entry, SourceFields, DEFAULT_REF};
+use skillfile_core::models::{EntityType, Entry, SourceFields, DEFAULT_REF};
 use skillfile_core::parser::{infer_name, parse_manifest, MANIFEST_NAME};
 use skillfile_deploy::adapter::adapters;
 use skillfile_deploy::install::install_entry;
@@ -11,7 +11,10 @@ use skillfile_sources::sync::{sync_entry, SyncContext};
 
 /// Format an entry as a Skillfile line.
 fn format_line(entry: &Entry) -> String {
-    let mut parts = vec![entry.source_type().to_string(), entry.entity_type.clone()];
+    let mut parts = vec![
+        entry.source_type().to_string(),
+        entry.entity_type.to_string(),
+    ];
     parts.extend(format_parts(entry));
     parts.join("  ")
 }
@@ -26,7 +29,7 @@ pub fn entry_from_github(
 ) -> Entry {
     let inferred = infer_name(path);
     Entry {
-        entity_type: entity_type.to_string(),
+        entity_type: EntityType::parse(entity_type).unwrap_or(EntityType::Skill),
         name: name.unwrap_or(&inferred).to_string(),
         source: SourceFields::Github {
             owner_repo: owner_repo.to_string(),
@@ -40,7 +43,7 @@ pub fn entry_from_github(
 pub fn entry_from_local(entity_type: &str, path: &str, name: Option<&str>) -> Entry {
     let inferred = infer_name(path);
     Entry {
-        entity_type: entity_type.to_string(),
+        entity_type: EntityType::parse(entity_type).unwrap_or(EntityType::Skill),
         name: name.unwrap_or(&inferred).to_string(),
         source: SourceFields::Local {
             path: path.to_string(),
@@ -52,7 +55,7 @@ pub fn entry_from_local(entity_type: &str, path: &str, name: Option<&str>) -> En
 pub fn entry_from_url(entity_type: &str, url: &str, name: Option<&str>) -> Entry {
     let inferred = infer_name(url);
     Entry {
-        entity_type: entity_type.to_string(),
+        entity_type: EntityType::parse(entity_type).unwrap_or(EntityType::Skill),
         name: name.unwrap_or(&inferred).to_string(),
         source: SourceFields::Url {
             url: url.to_string(),

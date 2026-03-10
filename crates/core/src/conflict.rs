@@ -39,6 +39,7 @@ pub fn clear_conflict(repo_root: &Path) -> Result<(), SkillfileError> {
 }
 
 /// Check whether a conflict file exists.
+#[must_use]
 pub fn has_conflict(repo_root: &Path) -> bool {
     repo_root.join(CONFLICT_FILE).exists()
 }

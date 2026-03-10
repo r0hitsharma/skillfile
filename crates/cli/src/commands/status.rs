@@ -3,7 +3,7 @@ use std::path::Path;
 
 use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock};
-use skillfile_core::models::{Entry, Manifest, SourceFields};
+use skillfile_core::models::{short_sha, Entry, Manifest, SourceFields};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
 use skillfile_core::patch::walkdir;
 use skillfile_deploy::paths::{installed_dir_files, installed_path};
@@ -140,7 +140,7 @@ pub fn cmd_status(repo_root: &Path, check_upstream: bool) -> Result<(), Skillfil
             format!("  {}", annotations.join("  "))
         };
 
-        let sha_short = &sha[..12.min(sha.len())];
+        let sha_short = short_sha(sha);
 
         let status = if meta.as_deref() != Some(sha.as_str()) {
             format!("locked    sha={sha_short}  (missing or stale){annotation}")
@@ -162,7 +162,7 @@ pub fn cmd_status(repo_root: &Path, check_upstream: bool) -> Result<(), Skillfil
                 if upstream_sha == *sha {
                     format!("up to date  sha={sha_short}{annotation}")
                 } else {
-                    let upstream_short = &upstream_sha[..12.min(upstream_sha.len())];
+                    let upstream_short = short_sha(&upstream_sha);
                     format!("outdated    locked={sha_short}  upstream={upstream_short}{annotation}")
                 }
             } else {

@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use skillfile_core::conflict::{read_conflict, write_conflict};
 use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock};
-use skillfile_core::models::{ConflictState, Entry, InstallOptions, InstallTarget, Manifest};
+use skillfile_core::models::{
+    short_sha, ConflictState, Entry, InstallOptions, InstallTarget, Manifest,
+};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
 use skillfile_core::patch::{
     apply_patch_pure, dir_patch_path, generate_patch, has_patch, patches_root, read_patch,
@@ -65,7 +67,7 @@ fn apply_dir_patches(
     repo_root: &Path,
 ) -> Result<(), SkillfileError> {
     let patches_dir = patches_root(repo_root)
-        .join(format!("{}s", entry.entity_type))
+        .join(entry.entity_type.dir_name())
         .join(&entry.name);
     if !patches_dir.is_dir() {
         return Ok(());
@@ -276,7 +278,7 @@ pub fn install_entry(
         None => return Ok(()),
     };
 
-    if !adapter.supports(&entry.entity_type) {
+    if !adapter.supports(entry.entity_type.as_str()) {
         return Ok(());
     }
 
@@ -369,7 +371,7 @@ fn deploy_all(
                         repo_root,
                         &ConflictState {
                             entry: entry_name.clone(),
-                            entity_type: entry.entity_type.clone(),
+                            entity_type: entry.entity_type.to_string(),
                             old_sha: old_sha.clone(),
                             new_sha: new_sha.clone(),
                         },
@@ -379,8 +381,8 @@ fn deploy_all(
                         if !old_sha.is_empty() && !new_sha.is_empty() && old_sha != new_sha {
                             format!(
                                 "\n  upstream: {} \u{2192} {}",
-                                &old_sha[..old_sha.len().min(12)],
-                                &new_sha[..new_sha.len().min(12)]
+                                short_sha(&old_sha),
+                                short_sha(&new_sha)
                             )
                         } else {
                             String::new()
@@ -460,11 +462,11 @@ pub fn cmd_install(repo_root: &Path, dry_run: bool, update: bool) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skillfile_core::models::{Entry, InstallTarget, Scope, SourceFields};
+    use skillfile_core::models::{EntityType, Entry, InstallTarget, Scope, SourceFields};
 
     fn make_agent_entry(name: &str) -> Entry {
         Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: name.into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -476,7 +478,7 @@ mod tests {
 
     fn make_local_entry(name: &str, path: &str) -> Entry {
         Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: name.into(),
             source: SourceFields::Local { path: path.into() },
         }
@@ -572,7 +574,7 @@ mod tests {
         std::fs::write(vdir.join("examples.md"), "# Examples").unwrap();
 
         let entry = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "python-pro".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -601,7 +603,7 @@ mod tests {
         std::fs::write(vdir.join(".meta"), "{}").unwrap();
 
         let entry = Entry {
-            entity_type: "agent".into(),
+            entity_type: EntityType::Agent,
             name: "core-dev".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -635,22 +637,6 @@ mod tests {
         install_entry(&entry, &target, dir.path(), None).unwrap();
     }
 
-    #[test]
-    fn install_entry_unknown_entity_type_skipped() {
-        let dir = tempfile::tempdir().unwrap();
-        let entry = Entry {
-            entity_type: "hook".into(),
-            name: "my-hook".into(),
-            source: SourceFields::Local {
-                path: "hooks/my-hook.md".into(),
-            },
-        };
-        let target = make_target("claude-code", Scope::Local);
-        install_entry(&entry, &target, dir.path(), None).unwrap();
-
-        assert!(!dir.path().join(".claude").exists());
-    }
-
     // -- Patch application during install --
 
     #[test]
@@ -664,7 +650,7 @@ mod tests {
 
         // Write a patch
         let entry = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
@@ -699,7 +685,7 @@ mod tests {
         std::fs::write(vdir.join("test.md"), "totally different\ncontent\n").unwrap();
 
         let entry = Entry {
-            entity_type: "skill".into(),
+            entity_type: EntityType::Skill,
             name: "test".into(),
             source: SourceFields::Github {
                 owner_repo: "owner/repo".into(),
