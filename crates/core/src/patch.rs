@@ -555,4 +555,309 @@ mod tests {
         remove_all_dir_patches(&entry, dir.path()).unwrap();
         assert!(!has_dir_patch(&entry, dir.path()));
     }
+
+    // --- remove_patch: no-op when patch does not exist ---
+
+    #[test]
+    fn remove_patch_nonexistent_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = github_entry("ghost-agent", EntityType::Agent);
+        // No patch was written — remove_patch must return Ok without panicking.
+        assert!(!has_patch(&entry, dir.path()));
+        remove_patch(&entry, dir.path()).unwrap();
+        assert!(!has_patch(&entry, dir.path()));
+    }
+
+    // --- remove_patch: parent directory cleaned up when empty ---
+
+    #[test]
+    fn remove_patch_cleans_up_empty_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = github_entry("solo-skill", EntityType::Skill);
+        write_patch(&entry, "some patch text\n", dir.path()).unwrap();
+
+        // Confirm that the parent directory (.skillfile/patches/skills/) was created.
+        let parent = patches_root(dir.path()).join("skills");
+        assert!(parent.is_dir(), "parent dir should exist after write_patch");
+
+        remove_patch(&entry, dir.path()).unwrap();
+
+        // The patch file and the now-empty parent dir should both be gone.
+        assert!(
+            !has_patch(&entry, dir.path()),
+            "patch file should be removed"
+        );
+        assert!(
+            !parent.exists(),
+            "empty parent dir should be removed after last patch is deleted"
+        );
+    }
+
+    // --- remove_patch: parent directory NOT cleaned up when non-empty ---
+
+    #[test]
+    fn remove_patch_keeps_parent_dir_when_nonempty() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry_a = github_entry("skill-a", EntityType::Skill);
+        let entry_b = github_entry("skill-b", EntityType::Skill);
+        write_patch(&entry_a, "patch a\n", dir.path()).unwrap();
+        write_patch(&entry_b, "patch b\n", dir.path()).unwrap();
+
+        let parent = patches_root(dir.path()).join("skills");
+        remove_patch(&entry_a, dir.path()).unwrap();
+
+        // skill-b.patch still lives there — parent dir must NOT be removed.
+        assert!(
+            parent.is_dir(),
+            "parent dir must survive when another patch still exists"
+        );
+        assert!(has_patch(&entry_b, dir.path()));
+    }
+
+    // --- remove_dir_patch: no-op when patch does not exist ---
+
+    #[test]
+    fn remove_dir_patch_nonexistent_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = github_entry("ghost-skill", EntityType::Skill);
+        // No patch was written — must return Ok without panicking.
+        remove_dir_patch(&entry, "missing.md", dir.path()).unwrap();
+    }
+
+    // --- remove_dir_patch: entry-specific directory cleaned up when empty ---
+
+    #[test]
+    fn remove_dir_patch_cleans_up_empty_entry_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = github_entry("lang-pro", EntityType::Skill);
+        write_dir_patch(&entry, "python.md", "patch text\n", dir.path()).unwrap();
+
+        // The entry-specific directory (.skillfile/patches/skills/lang-pro/) should exist.
+        let entry_dir = patches_root(dir.path()).join("skills").join("lang-pro");
+        assert!(
+            entry_dir.is_dir(),
+            "entry dir should exist after write_dir_patch"
+        );
+
+        remove_dir_patch(&entry, "python.md", dir.path()).unwrap();
+
+        // The single patch is gone — the entry dir should be removed too.
+        assert!(
+            !entry_dir.exists(),
+            "entry dir should be removed when it becomes empty"
+        );
+    }
+
+    // --- remove_dir_patch: entry-specific directory kept when non-empty ---
+
+    #[test]
+    fn remove_dir_patch_keeps_entry_dir_when_nonempty() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = github_entry("lang-pro", EntityType::Skill);
+        write_dir_patch(&entry, "python.md", "p1\n", dir.path()).unwrap();
+        write_dir_patch(&entry, "typescript.md", "p2\n", dir.path()).unwrap();
+
+        let entry_dir = patches_root(dir.path()).join("skills").join("lang-pro");
+        remove_dir_patch(&entry, "python.md", dir.path()).unwrap();
+
+        // typescript.md.patch still exists — entry dir must be kept.
+        assert!(
+            entry_dir.is_dir(),
+            "entry dir must survive when another patch still exists"
+        );
+    }
+
+    // --- generate_patch: inputs without trailing newline ---
+
+    #[test]
+    fn generate_patch_no_trailing_newline_original() {
+        // original has no trailing \n; all output lines must still end with \n.
+        let p = generate_patch("old text", "new text\n", "test.md");
+        assert!(!p.is_empty(), "patch should not be empty");
+        for seg in p.split_inclusive('\n') {
+            assert!(
+                seg.ends_with('\n'),
+                "every output line must end with \\n, got: {seg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_patch_no_trailing_newline_modified() {
+        // modified has no trailing \n; all output lines must still end with \n.
+        let p = generate_patch("old text\n", "new text", "test.md");
+        assert!(!p.is_empty(), "patch should not be empty");
+        for seg in p.split_inclusive('\n') {
+            assert!(
+                seg.ends_with('\n'),
+                "every output line must end with \\n, got: {seg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_patch_both_inputs_no_trailing_newline() {
+        // Neither original nor modified ends with \n.
+        let p = generate_patch("old line", "new line", "test.md");
+        assert!(!p.is_empty(), "patch should not be empty");
+        for seg in p.split_inclusive('\n') {
+            assert!(
+                seg.ends_with('\n'),
+                "every output line must end with \\n, got: {seg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_patch_no_trailing_newline_roundtrip() {
+        // apply_patch_pure must reconstruct the modified text even when neither
+        // side ends with a newline.
+        let orig = "line one\nline two";
+        let modified = "line one\nline changed";
+        let patch = generate_patch(orig, modified, "test.md");
+        assert!(!patch.is_empty());
+        // The patch must normalise to a clean result — at minimum not error.
+        let result = apply_patch_pure(orig, &patch).unwrap();
+        // The applied result should match modified (possibly with a trailing newline
+        // added by the normalization, so we compare trimmed content).
+        assert_eq!(
+            result.trim_end_matches('\n'),
+            modified.trim_end_matches('\n')
+        );
+    }
+
+    // --- apply_patch_pure: "\ No newline at end of file" marker in patch ---
+
+    #[test]
+    fn apply_patch_pure_with_no_newline_marker() {
+        // A patch that was generated externally may contain the "\ No newline at
+        // end of file" marker.  parse_hunks() must skip it cleanly.
+        let orig = "line1\nline2\n";
+        let patch = concat!(
+            "--- a/test.md\n",
+            "+++ b/test.md\n",
+            "@@ -1,2 +1,2 @@\n",
+            " line1\n",
+            "-line2\n",
+            "+changed\n",
+            "\\ No newline at end of file\n",
+        );
+        let result = apply_patch_pure(orig, patch).unwrap();
+        assert_eq!(result, "line1\nchanged\n");
+    }
+
+    // --- walkdir: edge cases ---
+
+    #[test]
+    fn walkdir_empty_directory_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = walkdir(dir.path());
+        assert!(
+            files.is_empty(),
+            "walkdir of empty dir should return empty vec"
+        );
+    }
+
+    #[test]
+    fn walkdir_nonexistent_directory_returns_empty() {
+        let path = Path::new("/tmp/skillfile_test_does_not_exist_xyz_9999");
+        let files = walkdir(path);
+        assert!(
+            files.is_empty(),
+            "walkdir of non-existent dir should return empty vec"
+        );
+    }
+
+    #[test]
+    fn walkdir_nested_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.path().join("top.txt"), "top").unwrap();
+        std::fs::write(sub.join("nested.txt"), "nested").unwrap();
+
+        let files = walkdir(dir.path());
+        assert_eq!(files.len(), 2, "should find both files");
+
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"top.txt".to_string()));
+        assert!(names.contains(&"nested.txt".to_string()));
+    }
+
+    #[test]
+    fn walkdir_results_are_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("z.txt"), "z").unwrap();
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("m.txt"), "m").unwrap();
+
+        let files = walkdir(dir.path());
+        let sorted = {
+            let mut v = files.clone();
+            v.sort();
+            v
+        };
+        assert_eq!(files, sorted, "walkdir results must be sorted");
+    }
+
+    // --- apply_patch_pure: fuzzy hunk matching ---
+
+    #[test]
+    fn apply_patch_pure_fuzzy_hunk_matching() {
+        // Build an original with 20 lines.
+        let orig: String = (1..=20).map(|i| format!("line{i}\n")).collect();
+
+        // Construct a patch whose hunk header claims the context starts at line 5
+        // (1-based), but the actual content we want to change is at line 7.
+        // find_hunk_position will search ±100 lines and should find the match.
+        let patch = concat!(
+            "--- a/test.md\n",
+            "+++ b/test.md\n",
+            "@@ -5,3 +5,3 @@\n", // header says line 5, but context matches line 7
+            " line7\n",
+            "-line8\n",
+            "+CHANGED8\n",
+            " line9\n",
+        );
+
+        let result = apply_patch_pure(&orig, patch).unwrap();
+        assert!(
+            result.contains("CHANGED8\n"),
+            "fuzzy match should have applied the change"
+        );
+        assert!(
+            !result.contains("line8\n"),
+            "original line8 should have been replaced"
+        );
+    }
+
+    // --- apply_patch_pure: patch extends beyond end of file ---
+
+    #[test]
+    fn apply_patch_pure_extends_beyond_eof_errors() {
+        // A patch with an empty context list and hunk start beyond the file length
+        // triggers the "patch extends beyond end of file" error path in
+        // find_hunk_position when ctx_lines is empty.
+        //
+        // We craft a hunk header that places the hunk at line 999 of a 2-line file
+        // and supply a context line that won't match anywhere — this exercises the
+        // "context mismatch" branch (which is what fires when ctx_lines is non-empty
+        // and nothing is found within ±100 of the declared position).
+        let orig = "line1\nline2\n";
+        let patch = concat!(
+            "--- a/test.md\n",
+            "+++ b/test.md\n",
+            "@@ -999,1 +999,1 @@\n",
+            "-nonexistent_line\n",
+            "+replacement\n",
+        );
+        let result = apply_patch_pure(orig, patch);
+        assert!(
+            result.is_err(),
+            "applying a patch beyond EOF should return an error"
+        );
+    }
 }

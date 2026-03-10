@@ -353,3 +353,834 @@ pub fn fetch_dir_at_sha(
     }
     Ok(result)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+    use std::path::Path;
+
+    use skillfile_core::error::SkillfileError;
+    use skillfile_core::models::{EntityType, Entry, LockEntry, SourceFields};
+
+    use crate::http::HttpClient;
+
+    use super::{
+        content_exists, fetch_dir_at_sha, fetch_file_at_sha, sync_entry, vendor_dir_for,
+        SyncContext, VENDOR_DIR,
+    };
+
+    // -----------------------------------------------------------------------
+    // MockClient
+    // -----------------------------------------------------------------------
+
+    /// A deterministic HTTP client for tests.
+    ///
+    /// Responses are keyed by URL.  A missing key causes an error, ensuring that
+    /// tests are explicit about every URL they expect to be called.
+    struct MockClient {
+        bytes_responses: HashMap<String, Vec<u8>>,
+        json_responses: HashMap<String, Option<String>>,
+    }
+
+    impl MockClient {
+        fn new() -> Self {
+            Self {
+                bytes_responses: HashMap::new(),
+                json_responses: HashMap::new(),
+            }
+        }
+
+        fn with_bytes(mut self, url: impl Into<String>, bytes: Vec<u8>) -> Self {
+            self.bytes_responses.insert(url.into(), bytes);
+            self
+        }
+
+        fn with_json(mut self, url: impl Into<String>, body: Option<String>) -> Self {
+            self.json_responses.insert(url.into(), body);
+            self
+        }
+    }
+
+    impl HttpClient for MockClient {
+        fn get_bytes(&self, url: &str) -> Result<Vec<u8>, SkillfileError> {
+            self.bytes_responses
+                .get(url)
+                .cloned()
+                .ok_or_else(|| SkillfileError::Network(format!("unexpected get_bytes: {url}")))
+        }
+
+        fn get_json(&self, url: &str) -> Result<Option<String>, SkillfileError> {
+            self.json_responses
+                .get(url)
+                .cloned()
+                .ok_or_else(|| SkillfileError::Network(format!("unexpected get_json: {url}")))
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    fn skill_entry(name: &str, path_in_repo: &str) -> Entry {
+        Entry {
+            entity_type: EntityType::Skill,
+            name: name.into(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: path_in_repo.into(),
+                ref_: "main".into(),
+            },
+        }
+    }
+
+    fn agent_entry(name: &str, path_in_repo: &str) -> Entry {
+        Entry {
+            entity_type: EntityType::Agent,
+            name: name.into(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: path_in_repo.into(),
+                ref_: "main".into(),
+            },
+        }
+    }
+
+    fn local_entry(name: &str, path: &str) -> Entry {
+        Entry {
+            entity_type: EntityType::Skill,
+            name: name.into(),
+            source: SourceFields::Local { path: path.into() },
+        }
+    }
+
+    fn url_entry(name: &str, url: &str) -> Entry {
+        Entry {
+            entity_type: EntityType::Skill,
+            name: name.into(),
+            source: SourceFields::Url { url: url.into() },
+        }
+    }
+
+    fn make_sync_ctx(repo_root: &Path) -> SyncContext {
+        SyncContext {
+            repo_root: repo_root.to_path_buf(),
+            dry_run: false,
+            update: false,
+            sha_cache: HashMap::new(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // vendor_dir_for
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn vendor_dir_for_skill_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        let result = vendor_dir_for(&entry, dir.path());
+        let expected = dir.path().join(VENDOR_DIR).join("skills").join("my-skill");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn vendor_dir_for_agent_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = agent_entry("my-agent", "agents/my-agent.md");
+        let result = vendor_dir_for(&entry, dir.path());
+        let expected = dir.path().join(VENDOR_DIR).join("agents").join("my-agent");
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn vendor_dir_for_is_nested_under_vendor_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("foo", "foo.md");
+        let result = vendor_dir_for(&entry, dir.path());
+        // Path must start with <repo_root>/.skillfile/cache
+        assert!(result.starts_with(dir.path().join(VENDOR_DIR)));
+    }
+
+    #[test]
+    fn vendor_dir_for_uses_entry_name_not_path_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: "custom-name".into(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: "skills/different-name.md".into(),
+                ref_: "main".into(),
+            },
+        };
+        let result = vendor_dir_for(&entry, dir.path());
+        assert!(result.ends_with("custom-name"));
+        assert!(!result.to_string_lossy().contains("different-name"));
+    }
+
+    // -----------------------------------------------------------------------
+    // content_exists
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn content_exists_github_single_file_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        let vdir = dir.path().join("vdir");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("my-skill.md"), b"# skill").unwrap();
+        assert!(content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_github_single_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        let vdir = dir.path().join("vdir");
+        std::fs::create_dir_all(&vdir).unwrap();
+        // No content file written
+        assert!(!content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_github_single_file_vdir_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        let vdir = dir.path().join("nonexistent");
+        assert!(!content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_github_dir_entry_with_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // "skills/python-pro" has no ".md" suffix → dir entry
+        let entry = skill_entry("python-pro", "skills/python-pro");
+        let vdir = dir.path().join("vdir");
+        std::fs::create_dir_all(&vdir).unwrap();
+        // Must have at least one non-.meta file
+        std::fs::write(vdir.join("python.md"), b"# Python").unwrap();
+        std::fs::write(vdir.join(".meta"), b"{}").unwrap();
+        assert!(content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_github_dir_entry_only_meta() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("python-pro", "skills/python-pro");
+        let vdir = dir.path().join("vdir");
+        std::fs::create_dir_all(&vdir).unwrap();
+        // Only .meta — should be treated as empty
+        std::fs::write(vdir.join(".meta"), b"{}").unwrap();
+        assert!(!content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_github_dir_entry_vdir_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("python-pro", "skills/python-pro");
+        let vdir = dir.path().join("nonexistent");
+        assert!(!content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_local_always_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = local_entry("git-commit", "skills/git/commit.md");
+        let vdir = dir.path().join("vdir");
+        // Even if vdir and content file somehow exist, local always returns false
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("commit.md"), b"# local").unwrap();
+        assert!(!content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_url_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = url_entry("my-skill", "https://example.com/skill.md");
+        let vdir = dir.path().join("vdir");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("skill.md"), b"# skill").unwrap();
+        assert!(content_exists(&entry, &vdir));
+    }
+
+    #[test]
+    fn content_exists_url_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = url_entry("my-skill", "https://example.com/skill.md");
+        let vdir = dir.path().join("vdir");
+        std::fs::create_dir_all(&vdir).unwrap();
+        // No content file
+        assert!(!content_exists(&entry, &vdir));
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_entry — local entry is skipped
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sync_entry_local_skips_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = local_entry("git-commit", "skills/git/commit.md");
+        let client = MockClient::new(); // no responses needed
+        let mut ctx = make_sync_ctx(dir.path());
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+
+        let result = sync_entry(&client, &entry, &mut ctx, &mut locked);
+        assert!(result.is_ok());
+        // Lock must not have been modified for a local entry
+        assert!(locked.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_entry — github single-file entry, dry_run
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sync_entry_github_dry_run_skips_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        // MockClient intentionally has no responses: if any HTTP call is made the
+        // test will fail with "unexpected get_*" rather than a false positive.
+        let client = MockClient::new();
+        let mut ctx = make_sync_ctx(dir.path());
+        ctx.dry_run = true;
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+
+        let result = sync_entry(&client, &entry, &mut ctx, &mut locked);
+        assert!(result.is_ok());
+        // Dry-run must not persist any lock entry
+        assert!(locked.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_entry — github single-file entry, up-to-date (locked SHA matches meta)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sync_entry_github_up_to_date_skips_fetch() {
+        let sha = "aabbccdd1122334455667788aabbccdd11223344";
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        let vdir = vendor_dir_for(&entry, dir.path());
+        std::fs::create_dir_all(&vdir).unwrap();
+
+        // Write .meta with the same SHA that is in the lock
+        let meta = serde_json::json!({
+            "sha": sha,
+            "source_type": "github",
+            "owner_repo": "owner/repo",
+            "path_in_repo": "skills/my-skill.md",
+            "ref": "main",
+            "raw_url": "https://raw.githubusercontent.com/owner/repo/aabbccdd/skills/my-skill.md"
+        });
+        std::fs::write(
+            vdir.join(".meta"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+        // Write the content file so content_exists returns true
+        std::fs::write(vdir.join("my-skill.md"), b"# skill").unwrap();
+
+        // Populate lock with the same SHA
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+        locked.insert(
+            "github/skill/my-skill".to_string(),
+            LockEntry {
+                sha: sha.to_string(),
+                raw_url: "https://raw.githubusercontent.com/owner/repo/aabbccdd/skills/my-skill.md"
+                    .into(),
+            },
+        );
+
+        // MockClient has no responses: if any HTTP call is made, the test fails
+        let client = MockClient::new();
+        let mut ctx = make_sync_ctx(dir.path());
+
+        let result = sync_entry(&client, &entry, &mut ctx, &mut locked);
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+        // Lock entry must remain unchanged
+        assert_eq!(locked["github/skill/my-skill"].sha, sha);
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_entry — github single-file entry, SHA resolved via mock
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sync_entry_github_fetches_and_writes_file() {
+        let sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let dir = tempfile::tempdir().unwrap();
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+
+        // Commit SHA resolution URL
+        let sha_url = "https://api.github.com/repos/owner/repo/commits/main".to_string();
+        let sha_json = serde_json::json!({ "sha": sha }).to_string();
+
+        // Raw file download URL
+        let raw_url =
+            format!("https://raw.githubusercontent.com/owner/repo/{sha}/skills/my-skill.md");
+
+        let client = MockClient::new()
+            .with_json(sha_url, Some(sha_json))
+            .with_bytes(raw_url.clone(), b"# My Skill\nContent here.".to_vec());
+
+        let mut ctx = make_sync_ctx(dir.path());
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+
+        let result = sync_entry(&client, &entry, &mut ctx, &mut locked);
+        assert!(result.is_ok(), "sync_entry failed: {result:?}");
+
+        // Lock must be updated with the resolved SHA
+        let lock_entry = locked
+            .get("github/skill/my-skill")
+            .expect("lock entry missing");
+        assert_eq!(lock_entry.sha, sha);
+
+        // Content file must exist on disk
+        let vdir = vendor_dir_for(&entry, dir.path());
+        assert!(vdir.join("my-skill.md").exists());
+        let written = std::fs::read_to_string(vdir.join("my-skill.md")).unwrap();
+        assert_eq!(written, "# My Skill\nContent here.");
+
+        // .meta must exist on disk
+        assert!(vdir.join(".meta").exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_entry — github, SHA cached across entries
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sync_entry_github_sha_cached_on_second_call() {
+        let sha = "cafebabecafebabecafebabecafebabecafebabe";
+        let dir = tempfile::tempdir().unwrap();
+
+        let entry1 = skill_entry("skill-one", "skills/one.md");
+        let entry2 = skill_entry("skill-two", "skills/two.md");
+
+        let sha_url = "https://api.github.com/repos/owner/repo/commits/main".to_string();
+        let sha_json = serde_json::json!({ "sha": sha }).to_string();
+
+        let raw_url1 = format!("https://raw.githubusercontent.com/owner/repo/{sha}/skills/one.md");
+        let raw_url2 = format!("https://raw.githubusercontent.com/owner/repo/{sha}/skills/two.md");
+
+        // SHA resolution URL appears only once in the mock — the second call must
+        // use the cache, otherwise MockClient would error on the second get_json.
+        let client = MockClient::new()
+            .with_json(sha_url, Some(sha_json))
+            .with_bytes(raw_url1, b"# One".to_vec())
+            .with_bytes(raw_url2, b"# Two".to_vec());
+
+        let mut ctx = make_sync_ctx(dir.path());
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+
+        sync_entry(&client, &entry1, &mut ctx, &mut locked).unwrap();
+        // After the first call the SHA must be in the cache
+        assert!(ctx
+            .sha_cache
+            .contains_key(&("owner/repo".to_string(), "main".to_string())));
+
+        // The second call must succeed using the cached SHA (no second get_json call)
+        sync_entry(&client, &entry2, &mut ctx, &mut locked).unwrap();
+
+        assert!(locked.contains_key("github/skill/skill-one"));
+        assert!(locked.contains_key("github/skill/skill-two"));
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_entry — github dot-path (SKILL.md convention)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sync_entry_github_dot_path_writes_skill_md() {
+        let sha = "1234567890abcdef1234567890abcdef12345678";
+        let dir = tempfile::tempdir().unwrap();
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: "root-skill".into(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: ".".into(),
+                ref_: "main".into(),
+            },
+        };
+
+        let sha_url = "https://api.github.com/repos/owner/repo/commits/main".to_string();
+        let sha_json = serde_json::json!({ "sha": sha }).to_string();
+        let raw_url = format!("https://raw.githubusercontent.com/owner/repo/{sha}/SKILL.md");
+
+        let client = MockClient::new()
+            .with_json(sha_url, Some(sha_json))
+            .with_bytes(raw_url, b"# Root Skill".to_vec());
+
+        let mut ctx = make_sync_ctx(dir.path());
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+
+        sync_entry(&client, &entry, &mut ctx, &mut locked).unwrap();
+
+        let vdir = vendor_dir_for(&entry, dir.path());
+        assert!(vdir.join("SKILL.md").exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_url
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sync_url_fetches_and_writes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = "https://example.com/skill.md";
+        let entry = url_entry("example-skill", url);
+
+        let client =
+            MockClient::new().with_bytes(url, b"# Example Skill\nFetched content.".to_vec());
+
+        let mut ctx = make_sync_ctx(dir.path());
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+
+        let result = sync_entry(&client, &entry, &mut ctx, &mut locked);
+        assert!(result.is_ok(), "sync_url failed: {result:?}");
+
+        let vdir = vendor_dir_for(&entry, dir.path());
+        assert!(vdir.join("skill.md").exists());
+        let written = std::fs::read_to_string(vdir.join("skill.md")).unwrap();
+        assert_eq!(written, "# Example Skill\nFetched content.");
+
+        // .meta must be written with source_type = "url"
+        let meta_text = std::fs::read_to_string(vdir.join(".meta")).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&meta_text).unwrap();
+        assert_eq!(meta["source_type"], "url");
+        assert_eq!(meta["url"], url);
+    }
+
+    #[test]
+    fn sync_url_dry_run_skips_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = "https://example.com/skill.md";
+        let entry = url_entry("example-skill", url);
+
+        // No bytes registered: any get_bytes call would error
+        let client = MockClient::new();
+        let mut ctx = make_sync_ctx(dir.path());
+        ctx.dry_run = true;
+        let mut locked: BTreeMap<String, LockEntry> = BTreeMap::new();
+
+        let result = sync_entry(&client, &entry, &mut ctx, &mut locked);
+        assert!(result.is_ok());
+
+        // Nothing must have been written
+        let vdir = vendor_dir_for(&entry, dir.path());
+        assert!(!vdir.exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // cmd_sync — local-only manifest (no network)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cmd_sync_local_only_manifest_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Skillfile"),
+            "install  claude-code  global\n\
+             local  skill  git-commit  skills/git/commit.md\n",
+        )
+        .unwrap();
+        // Create the local skill file so it is valid
+        let skills_dir = dir.path().join("skills").join("git");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("commit.md"), b"# git commit").unwrap();
+
+        let result = super::cmd_sync(dir.path(), false, None, false);
+        assert!(result.is_ok(), "cmd_sync failed: {result:?}");
+    }
+
+    #[test]
+    fn cmd_sync_no_entries_in_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Skillfile"),
+            "install  claude-code  global\n",
+        )
+        .unwrap();
+
+        let result = super::cmd_sync(dir.path(), false, None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cmd_sync_missing_skillfile_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // No Skillfile written
+
+        let result = super::cmd_sync(dir.path(), false, None, false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Skillfile"),
+            "error message should mention Skillfile: {msg}"
+        );
+    }
+
+    #[test]
+    fn cmd_sync_entry_filter_local_only_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Skillfile"),
+            "install  claude-code  global\n\
+             local  skill  alpha  skills/alpha.md\n\
+             local  skill  beta   skills/beta.md\n",
+        )
+        .unwrap();
+
+        // Filter to only 'alpha' — must succeed
+        let result = super::cmd_sync(dir.path(), false, Some("alpha"), false);
+        assert!(result.is_ok(), "cmd_sync with filter failed: {result:?}");
+    }
+
+    #[test]
+    fn cmd_sync_entry_filter_not_found_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Skillfile"),
+            "install  claude-code  global\n\
+             local  skill  alpha  skills/alpha.md\n",
+        )
+        .unwrap();
+
+        let result = super::cmd_sync(dir.path(), false, Some("nonexistent"), false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("nonexistent"),
+            "error message should mention the missing entry name: {msg}"
+        );
+    }
+
+    #[test]
+    fn cmd_sync_dry_run_local_only_does_not_write_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Skillfile"),
+            "install  claude-code  global\n\
+             local  skill  git-commit  skills/git/commit.md\n",
+        )
+        .unwrap();
+
+        let result = super::cmd_sync(dir.path(), true, None, false);
+        assert!(result.is_ok(), "cmd_sync dry-run failed: {result:?}");
+
+        // No Skillfile.lock must have been written
+        assert!(!dir.path().join("Skillfile.lock").exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // fetch_file_at_sha
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fetch_file_at_sha_github_returns_content() {
+        let sha = "abcdef1234567890abcdef1234567890abcdef12";
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        let raw_url =
+            format!("https://raw.githubusercontent.com/owner/repo/{sha}/skills/my-skill.md");
+        let client = MockClient::new().with_bytes(raw_url, b"# My Skill\nHello world.".to_vec());
+
+        let result = fetch_file_at_sha(&client, &entry, sha);
+        assert!(result.is_ok(), "fetch_file_at_sha failed: {result:?}");
+        assert_eq!(result.unwrap(), "# My Skill\nHello world.");
+    }
+
+    #[test]
+    fn fetch_file_at_sha_dot_path_uses_skill_md() {
+        let sha = "abcdef1234567890abcdef1234567890abcdef12";
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: "root".into(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: ".".into(),
+                ref_: "main".into(),
+            },
+        };
+        let raw_url = format!("https://raw.githubusercontent.com/owner/repo/{sha}/SKILL.md");
+        let client = MockClient::new().with_bytes(raw_url, b"# Root skill content".to_vec());
+
+        let result = fetch_file_at_sha(&client, &entry, sha);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "# Root skill content");
+    }
+
+    #[test]
+    fn fetch_file_at_sha_non_github_returns_error() {
+        let entry = local_entry("git-commit", "skills/commit.md");
+        let client = MockClient::new();
+
+        let result = fetch_file_at_sha(&client, &entry, "somesha");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("github"), "error should mention github: {msg}");
+    }
+
+    #[test]
+    fn fetch_file_at_sha_url_entry_returns_error() {
+        let entry = url_entry("my-skill", "https://example.com/skill.md");
+        let client = MockClient::new();
+
+        let result = fetch_file_at_sha(&client, &entry, "somesha");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fetch_file_at_sha_binary_returns_error() {
+        let sha = "abcdef1234567890abcdef1234567890abcdef12";
+        let entry = skill_entry("my-skill", "skills/my-skill.md");
+        let raw_url =
+            format!("https://raw.githubusercontent.com/owner/repo/{sha}/skills/my-skill.md");
+        // Simulate a binary (non-UTF-8) response
+        let client = MockClient::new().with_bytes(
+            raw_url,
+            vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+        );
+
+        let result = fetch_file_at_sha(&client, &entry, sha);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("binary"),
+            "error should mention binary file: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // fetch_dir_at_sha
+    // -----------------------------------------------------------------------
+
+    /// Build the JSON that `list_github_dir_recursive` expects from the Git Trees API.
+    fn make_tree_json(owner_repo: &str, _sha: &str, base: &str, files: &[&str]) -> String {
+        let prefix = format!("{base}/");
+        let tree: Vec<serde_json::Value> = files
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "type": "blob",
+                    "path": format!("{prefix}{f}"),
+                    "url":  format!("https://api.github.com/repos/{owner_repo}/git/blobs/dummy")
+                })
+            })
+            .collect();
+        serde_json::json!({ "tree": tree }).to_string()
+    }
+
+    #[test]
+    fn fetch_dir_at_sha_github_returns_map() {
+        let sha = "deadbeef1234deadbeef1234deadbeef12345678";
+        let entry = skill_entry("python-pro", "skills/python-pro");
+
+        let tree_url =
+            format!("https://api.github.com/repos/owner/repo/git/trees/{sha}?recursive=1");
+        let tree_json = make_tree_json(
+            "owner/repo",
+            sha,
+            "skills/python-pro",
+            &["python.md", "advanced.md"],
+        );
+
+        let raw_url_py = format!(
+            "https://raw.githubusercontent.com/owner/repo/{sha}/skills/python-pro/python.md"
+        );
+        let raw_url_adv = format!(
+            "https://raw.githubusercontent.com/owner/repo/{sha}/skills/python-pro/advanced.md"
+        );
+
+        let client = MockClient::new()
+            .with_json(tree_url, Some(tree_json))
+            .with_bytes(raw_url_py, b"# Python skill".to_vec())
+            .with_bytes(raw_url_adv, b"# Advanced skill".to_vec());
+
+        let result = fetch_dir_at_sha(&client, &entry, sha);
+        assert!(result.is_ok(), "fetch_dir_at_sha failed: {result:?}");
+
+        let map = result.unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["python.md"], "# Python skill");
+        assert_eq!(map["advanced.md"], "# Advanced skill");
+    }
+
+    #[test]
+    fn fetch_dir_at_sha_non_github_returns_error() {
+        let entry = local_entry("python-pro", "skills/python-pro");
+        let client = MockClient::new();
+
+        let result = fetch_dir_at_sha(&client, &entry, "somesha");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("github"), "error should mention github: {msg}");
+    }
+
+    #[test]
+    fn fetch_dir_at_sha_url_entry_returns_error() {
+        let entry = url_entry("my-skill", "https://example.com/skills/");
+        let client = MockClient::new();
+
+        let result = fetch_dir_at_sha(&client, &entry, "somesha");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fetch_dir_at_sha_skips_binary_files() {
+        let sha = "deadbeef1234deadbeef1234deadbeef12345678";
+        let entry = skill_entry("mixed-dir", "skills/mixed-dir");
+
+        let tree_url =
+            format!("https://api.github.com/repos/owner/repo/git/trees/{sha}?recursive=1");
+        let tree_json = make_tree_json(
+            "owner/repo",
+            sha,
+            "skills/mixed-dir",
+            &["text.md", "image.png"],
+        );
+
+        let raw_url_txt =
+            format!("https://raw.githubusercontent.com/owner/repo/{sha}/skills/mixed-dir/text.md");
+        let raw_url_bin = format!(
+            "https://raw.githubusercontent.com/owner/repo/{sha}/skills/mixed-dir/image.png"
+        );
+
+        let client = MockClient::new()
+            .with_json(tree_url, Some(tree_json))
+            .with_bytes(raw_url_txt, b"# Text content".to_vec())
+            // Non-UTF-8 bytes for the binary file
+            .with_bytes(raw_url_bin, vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A]);
+
+        let result = fetch_dir_at_sha(&client, &entry, sha);
+        assert!(result.is_ok(), "fetch_dir_at_sha failed: {result:?}");
+
+        let map = result.unwrap();
+        // Binary file must be silently skipped
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["text.md"], "# Text content");
+        assert!(!map.contains_key("image.png"));
+    }
+
+    #[test]
+    fn fetch_dir_at_sha_empty_directory_returns_empty_map() {
+        let sha = "deadbeef1234deadbeef1234deadbeef12345678";
+        let entry = skill_entry("empty-dir", "skills/empty-dir");
+
+        let tree_url =
+            format!("https://api.github.com/repos/owner/repo/git/trees/{sha}?recursive=1");
+        // Tree with no entries under the prefix
+        let tree_json = serde_json::json!({ "tree": [] }).to_string();
+
+        let client = MockClient::new().with_json(tree_url, Some(tree_json));
+
+        let result = fetch_dir_at_sha(&client, &entry, sha);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+}

@@ -216,3 +216,5 @@ Skillfile.lock
 .skillfile/cache/
 .skillfile/conflict
 .complexipy_cache
+lcov.info
+coverage/

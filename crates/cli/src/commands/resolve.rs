@@ -466,4 +466,30 @@ mod tests {
         assert!(!has_conflicts);
         assert_eq!(merged, yours);
     }
+
+    #[test]
+    fn cmd_resolve_no_name_no_abort_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), "github  skill  owner/repo  skills/test.md\n");
+        let result = cmd_resolve(None, false, dir.path());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("entry name required"),
+            "expected 'entry name required' in error message"
+        );
+    }
+
+    #[test]
+    fn cmd_resolve_entry_not_in_manifest_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        // Manifest has "test" but we request "nonexistent"
+        write_manifest(dir.path(), "github  skill  owner/repo  skills/test.md\n");
+        let conflict = make_conflict("nonexistent", "skill");
+        write_conflict(dir.path(), &conflict).unwrap();
+        let result = cmd_resolve(Some("nonexistent"), false, dir.path());
+        assert!(result.is_err(), "expected error for entry not in manifest");
+    }
 }

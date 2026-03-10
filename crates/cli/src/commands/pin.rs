@@ -437,4 +437,601 @@ mod tests {
             scope: Scope::Local,
         }
     }
+
+    // -----------------------------------------------------------------------
+    // cmd_pin() output formatting
+    // -----------------------------------------------------------------------
+
+    // Exercises the "Pinned '...' — customisations saved to .skillfile/patches/"
+    // branch in cmd_pin by going through a full single-file github skill scenario.
+    #[test]
+    fn cmd_pin_prints_pinned_message_when_edits_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  owner/repo  skills/myskill.md\n",
+        );
+        write_lock(dir.path(), &make_lock_json("myskill", "skill"));
+
+        // Vendor cache
+        let vdir = dir.path().join(".skillfile/cache/skills/myskill");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("myskill.md"), "# MySkill\n\nOriginal.\n").unwrap();
+
+        // Installed (modified)
+        let inst_dir = dir.path().join(".claude/skills");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("myskill.md"), "# MySkill\n\nModified.\n").unwrap();
+
+        // cmd_pin itself returns Ok — we can't capture stdout in unit tests easily,
+        // but we can verify it returns Ok and the patch was written (proving the
+        // "Pinned" branch was reached).
+        let result = cmd_pin("myskill", dir.path(), false);
+        assert!(result.is_ok(), "cmd_pin must return Ok when edits exist");
+
+        let patch_path = dir.path().join(".skillfile/patches/skills/myskill.patch");
+        assert!(patch_path.exists(), "patch file must be written");
+    }
+
+    // Exercises the "Would pin '...' [dry-run]" branch.
+    #[test]
+    fn cmd_pin_dry_run_prints_would_pin_message() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  owner/repo  skills/myskill.md\n",
+        );
+        write_lock(dir.path(), &make_lock_json("myskill", "skill"));
+
+        let vdir = dir.path().join(".skillfile/cache/skills/myskill");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("myskill.md"), "original\n").unwrap();
+
+        let inst_dir = dir.path().join(".claude/skills");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("myskill.md"), "modified\n").unwrap();
+
+        // dry_run = true — "Would pin" branch
+        let result = cmd_pin("myskill", dir.path(), true);
+        assert!(result.is_ok(), "cmd_pin dry-run must return Ok");
+
+        // No patch must have been written
+        let patch_path = dir.path().join(".skillfile/patches/skills/myskill.patch");
+        assert!(!patch_path.exists(), "dry-run must not write a patch file");
+    }
+
+    // Exercises the fallthrough "other status" branch ("'...' matches upstream").
+    #[test]
+    fn cmd_pin_prints_nothing_to_pin_when_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  owner/repo  skills/myskill.md\n",
+        );
+        write_lock(dir.path(), &make_lock_json("myskill", "skill"));
+
+        let content = "# MySkill\n\nSame content.\n";
+        let vdir = dir.path().join(".skillfile/cache/skills/myskill");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("myskill.md"), content).unwrap();
+
+        let inst_dir = dir.path().join(".claude/skills");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("myskill.md"), content).unwrap();
+
+        let result = cmd_pin("myskill", dir.path(), false);
+        assert!(result.is_ok(), "cmd_pin must return Ok when nothing to pin");
+    }
+
+    // -----------------------------------------------------------------------
+    // pin_dir_entry() — happy path
+    // -----------------------------------------------------------------------
+
+    // Skills with claude-code use Nested dir mode: installed at .claude/skills/<name>/
+    // Only modified files get patches written; unmodified files do not.
+    #[test]
+    fn pin_dir_entry_writes_patch_only_for_modified_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        // Vendor cache — two files
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("SKILL.md"), "# Lang Pro\n\nOriginal.\n").unwrap();
+        std::fs::write(vdir.join("extra.md"), "# Extra\n\nUnchanged.\n").unwrap();
+
+        // Installed dir (Nested mode for skills)
+        let inst_dir = dir.path().join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        // SKILL.md modified, extra.md unchanged
+        std::fs::write(inst_dir.join("SKILL.md"), "# Lang Pro\n\nModified.\n").unwrap();
+        std::fs::write(inst_dir.join("extra.md"), "# Extra\n\nUnchanged.\n").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: name.to_string(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: format!("skills/{name}"),
+                ref_: "main".into(),
+            },
+        };
+
+        let result = pin_dir_entry(&entry, dir.path(), false).unwrap();
+        assert!(
+            result.contains("Pinned"),
+            "status must start with 'Pinned': {result}"
+        );
+        assert!(result.contains(name), "status must contain entry name");
+        assert!(
+            result.contains("SKILL.md"),
+            "status must list modified file"
+        );
+
+        // Patch written for modified file
+        let skill_patch = dir
+            .path()
+            .join(format!(".skillfile/patches/skills/{name}/SKILL.md.patch"));
+        assert!(skill_patch.exists(), "patch must be written for SKILL.md");
+        let patch_text = std::fs::read_to_string(&skill_patch).unwrap();
+        assert!(
+            patch_text.contains("-Original."),
+            "patch must remove old line"
+        );
+        assert!(patch_text.contains("+Modified."), "patch must add new line");
+
+        // No patch for unmodified file
+        let extra_patch = dir
+            .path()
+            .join(format!(".skillfile/patches/skills/{name}/extra.md.patch"));
+        assert!(
+            !extra_patch.exists(),
+            "patch must NOT be written for unchanged file"
+        );
+    }
+
+    #[test]
+    fn pin_dir_entry_dry_run_writes_no_patches() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("SKILL.md"), "# Lang Pro\n\nOriginal.\n").unwrap();
+
+        let inst_dir = dir.path().join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SKILL.md"), "# Lang Pro\n\nModified.\n").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: name.to_string(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: format!("skills/{name}"),
+                ref_: "main".into(),
+            },
+        };
+
+        let result = pin_dir_entry(&entry, dir.path(), true).unwrap();
+        assert!(
+            result.contains("Would pin"),
+            "dry-run status must start with 'Would pin': {result}"
+        );
+
+        let patch_dir = dir.path().join(format!(".skillfile/patches/skills/{name}"));
+        assert!(
+            !patch_dir.exists(),
+            "dry-run must not create patches directory"
+        );
+    }
+
+    #[test]
+    fn pin_dir_entry_all_identical_returns_nothing_to_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        let content = "# Identical\n\nSame content everywhere.\n";
+
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("SKILL.md"), content).unwrap();
+
+        let inst_dir = dir.path().join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SKILL.md"), content).unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: name.to_string(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: format!("skills/{name}"),
+                ref_: "main".into(),
+            },
+        };
+
+        let result = pin_dir_entry(&entry, dir.path(), false).unwrap();
+        assert!(
+            result.contains("matches upstream"),
+            "must report nothing to pin when all files identical: {result}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // pin_dir_entry() — installed not found
+    // -----------------------------------------------------------------------
+
+    // Vendor cache exists but no installed files (installed dir does not exist).
+    #[test]
+    fn pin_dir_entry_installed_not_found_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        // Vendor cache exists
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("SKILL.md"), "# Lang Pro\n").unwrap();
+
+        // Installed dir does NOT exist → installed_dir_files returns empty map
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: name.to_string(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: format!("skills/{name}"),
+                ref_: "main".into(),
+            },
+        };
+
+        let result = pin_dir_entry(&entry, dir.path(), false);
+        assert!(result.is_err(), "must error when installed files not found");
+        assert!(
+            result.unwrap_err().to_string().contains("not installed"),
+            "error must say 'not installed'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // cmd_pin() with dir entry (full flow through cmd_pin → pin_dir_entry)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cmd_pin_dir_entry_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("SKILL.md"), "# Lang Pro\n\nOriginal.\n").unwrap();
+
+        let inst_dir = dir.path().join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SKILL.md"), "# Lang Pro\n\nCustomised.\n").unwrap();
+
+        let result = cmd_pin(name, dir.path(), false);
+        assert!(
+            result.is_ok(),
+            "cmd_pin must succeed for dir entry: {result:?}"
+        );
+
+        let skill_patch = dir
+            .path()
+            .join(format!(".skillfile/patches/skills/{name}/SKILL.md.patch"));
+        assert!(skill_patch.exists(), "patch must be written for SKILL.md");
+    }
+
+    #[test]
+    fn cmd_pin_dir_entry_dry_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("SKILL.md"), "# Lang Pro\n\nOriginal.\n").unwrap();
+
+        let inst_dir = dir.path().join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SKILL.md"), "# Lang Pro\n\nCustomised.\n").unwrap();
+
+        let result = cmd_pin(name, dir.path(), true);
+        assert!(result.is_ok(), "cmd_pin dry-run must succeed: {result:?}");
+
+        let patch_dir = dir.path().join(format!(".skillfile/patches/skills/{name}"));
+        assert!(!patch_dir.exists(), "dry-run must not write any patches");
+    }
+
+    // -----------------------------------------------------------------------
+    // cmd_unpin() full flow
+    // -----------------------------------------------------------------------
+
+    // Full unpin flow: patch exists → patch is removed → upstream is restored from cache.
+    #[test]
+    fn cmd_unpin_full_flow_removes_patch_and_restores_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "myskill";
+
+        // Manifest with install target so install_entry can restore the file.
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}.md\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        let upstream_content = "# MySkill\n\nUpstream content.\n";
+        let modified_content = "# MySkill\n\nUser-modified content.\n";
+
+        // Vendor cache (upstream)
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join(format!("{name}.md")), upstream_content).unwrap();
+
+        // Installed file (user-modified)
+        let inst_dir = dir.path().join(".claude/skills");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join(format!("{name}.md")), modified_content).unwrap();
+
+        // Write a patch that represents the user's edits
+        let entry = github_entry_skill(name, &format!("skills/{name}.md"));
+        let patch_text =
+            crate::patch::generate_patch(upstream_content, modified_content, &format!("{name}.md"));
+        write_patch(&entry, &patch_text, dir.path()).unwrap();
+        assert!(
+            has_patch(&entry, dir.path()),
+            "patch must exist before unpin"
+        );
+
+        // Execute unpin
+        let result = cmd_unpin(name, dir.path());
+        assert!(result.is_ok(), "cmd_unpin must succeed: {result:?}");
+
+        // Patch must be removed
+        assert!(
+            !has_patch(&entry, dir.path()),
+            "patch must be removed after unpin"
+        );
+
+        // Installed file must be restored to upstream content
+        let installed_after = std::fs::read_to_string(inst_dir.join(format!("{name}.md"))).unwrap();
+        assert_eq!(
+            installed_after, upstream_content,
+            "installed file must match upstream after unpin"
+        );
+    }
+
+    // Unpin when not pinned: no error, no change.
+    #[test]
+    fn cmd_unpin_not_pinned_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  owner/repo  skills/myskill.md\n",
+        );
+
+        let result = cmd_unpin("myskill", dir.path());
+        assert!(result.is_ok(), "cmd_unpin of unpinned entry must return Ok");
+    }
+
+    // Full unpin flow for a dir entry: all dir patches are removed and
+    // upstream files are restored from the vendor cache (Nested mode).
+    #[test]
+    fn cmd_unpin_dir_entry_removes_all_dir_patches_and_restores() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        let upstream_skill = "# Lang Pro\n\nUpstream SKILL.\n";
+        let modified_skill = "# Lang Pro\n\nUser modified SKILL.\n";
+        let upstream_extra = "# Extra\n\nUpstream.\n";
+
+        // Vendor cache
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("SKILL.md"), upstream_skill).unwrap();
+        std::fs::write(vdir.join("extra.md"), upstream_extra).unwrap();
+
+        // Installed dir (modified)
+        let inst_dir = dir.path().join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SKILL.md"), modified_skill).unwrap();
+        std::fs::write(inst_dir.join("extra.md"), upstream_extra).unwrap();
+
+        // Write dir patches
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: name.to_string(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: format!("skills/{name}"),
+                ref_: "main".into(),
+            },
+        };
+        let patch_text = crate::patch::generate_patch(upstream_skill, modified_skill, "SKILL.md");
+        write_dir_patch(&entry, "SKILL.md", &patch_text, dir.path()).unwrap();
+        assert!(
+            has_dir_patch(&entry, dir.path()),
+            "dir patch must exist before unpin"
+        );
+
+        let result = cmd_unpin(name, dir.path());
+        assert!(result.is_ok(), "cmd_unpin must succeed: {result:?}");
+
+        // Dir patches must be removed
+        assert!(
+            !has_dir_patch(&entry, dir.path()),
+            "dir patches must be removed after unpin"
+        );
+
+        // Installed SKILL.md must be restored to upstream
+        let skill_after = std::fs::read_to_string(inst_dir.join("SKILL.md")).unwrap();
+        assert_eq!(
+            skill_after, upstream_skill,
+            "SKILL.md must be restored to upstream after unpin"
+        );
+    }
+
+    // cmd_unpin errors when name not found in manifest.
+    #[test]
+    fn cmd_unpin_entry_not_found_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), "local  skill  skills/foo.md\n");
+        let result = cmd_unpin("nonexistent", dir.path());
+        assert!(result.is_err(), "cmd_unpin must error for unknown entry");
+        assert!(
+            result.unwrap_err().to_string().contains("nonexistent"),
+            "error must mention the entry name"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // pin_entry() — dir entry routing
+    // -----------------------------------------------------------------------
+
+    // pin_entry routes to pin_dir_entry when is_dir_entry returns true.
+    // A github entry with path_in_repo lacking ".md" is a dir entry.
+    #[test]
+    fn pin_entry_routes_to_pin_dir_entry_for_dir_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        // No vendor cache → pin_dir_entry will error with "not cached"
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: name.to_string(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: format!("skills/{name}"),
+                ref_: "main".into(),
+            },
+        };
+
+        let result = pin_entry(&entry, dir.path(), false);
+        // Must error with "not cached" (from pin_dir_entry), confirming routing
+        assert!(
+            result.is_err(),
+            "must error when cache missing for dir entry"
+        );
+        assert!(
+            result.unwrap_err().to_string().contains("not cached"),
+            "error must say 'not cached'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // pin_dir_entry() — .meta file in cache is skipped
+    // -----------------------------------------------------------------------
+
+    // Verify that the .meta file in the vendor cache dir is not treated as a
+    // content file and does not generate a spurious patch.
+    #[test]
+    fn pin_dir_entry_skips_meta_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "lang-pro";
+
+        write_manifest(
+            dir.path(),
+            &format!(
+                "install  claude-code  local\ngithub  skill  {name}  owner/repo  skills/{name}\n"
+            ),
+        );
+        write_lock(dir.path(), &make_lock_json(name, "skill"));
+
+        let vdir = dir.path().join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        // .meta present alongside content file
+        std::fs::write(vdir.join(".meta"), r#"{"sha":"abc123"}"#).unwrap();
+        let content = "# Lang Pro\n\nSame.\n";
+        std::fs::write(vdir.join("SKILL.md"), content).unwrap();
+
+        let inst_dir = dir.path().join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SKILL.md"), content).unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: name.to_string(),
+            source: SourceFields::Github {
+                owner_repo: "owner/repo".into(),
+                path_in_repo: format!("skills/{name}"),
+                ref_: "main".into(),
+            },
+        };
+
+        let result = pin_dir_entry(&entry, dir.path(), false).unwrap();
+        assert!(
+            result.contains("matches upstream"),
+            "must report nothing to pin when only .meta differs: {result}"
+        );
+
+        // No patch for .meta
+        let meta_patch = dir
+            .path()
+            .join(format!(".skillfile/patches/skills/{name}/.meta.patch"));
+        assert!(!meta_patch.exists(), ".meta must never produce a patch");
+    }
 }

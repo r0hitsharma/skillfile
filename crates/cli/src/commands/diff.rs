@@ -413,4 +413,182 @@ mod tests {
         let result = cmd_diff("test", dir.path());
         assert!(result.is_ok());
     }
+
+    // -----------------------------------------------------------------------
+    // Dir entry helpers
+    // -----------------------------------------------------------------------
+
+    /// Build a lock JSON string for a dir entry (path_in_repo has no .md suffix).
+    fn make_dir_lock_json(name: &str, entity_type: &str) -> String {
+        format!(
+            r#"{{
+  "github/{entity_type}/{name}": {{
+    "sha": "abc123def456abcdef",
+    "raw_url": "https://api.github.com/repos/owner/repo/contents/skills/{name}?ref=abc123def456abcdef"
+  }}
+}}"#
+        )
+    }
+
+    /// Create the vendor cache directory for a dir entry with two files.
+    fn setup_dir_cache(dir: &Path, name: &str, content1: &str, content2: &str) {
+        let vdir = dir.join(format!(".skillfile/cache/skills/{name}"));
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("file1.md"), content1).unwrap();
+        std::fs::write(vdir.join("file2.md"), content2).unwrap();
+    }
+
+    /// Create the installed dir for a dir entry under .claude/skills/<name>/
+    /// (claude-code + local scope + skill entity type → Nested mode).
+    fn setup_installed_dir(dir: &Path, name: &str, content1: &str, content2: &str) {
+        let installed = dir.join(format!(".claude/skills/{name}"));
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(installed.join("file1.md"), content1).unwrap();
+        std::fs::write(installed.join("file2.md"), content2).unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // diff_local_dir — entry name not found in manifest
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diff_entry_name_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        // Manifest has "my-dir" but we ask for "nonexistent"
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock_file(dir.path(), &make_dir_lock_json("my-dir", "skill"));
+
+        let result = cmd_diff("nonexistent", dir.path());
+        assert!(result.is_err());
+        // find_entry_in produces an error message containing the name
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("nonexistent"),
+            "error should mention the missing entry name: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // diff_local_dir — vendor cache missing → "not cached" error
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diff_dir_entry_not_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock_file(dir.path(), &make_dir_lock_json("my-dir", "skill"));
+        // No vendor cache directory created → is_dir_entry is true, vdir.is_dir() is false
+
+        let result = cmd_diff("my-dir", dir.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("not cached"),
+            "expected 'not cached' in error, got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // diff_local_dir — cache exists but no installed files → "not installed" error
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diff_dir_entry_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock_file(dir.path(), &make_dir_lock_json("my-dir", "skill"));
+
+        // Vendor cache exists with content
+        setup_dir_cache(dir.path(), "my-dir", "content1\n", "content2\n");
+        // But no installed dir → installed_dir_files returns empty map
+
+        let result = cmd_diff("my-dir", dir.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("not installed"),
+            "expected 'not installed' in error, got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // diff_local_dir — cache and installed files have identical content → clean
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diff_dir_entry_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock_file(dir.path(), &make_dir_lock_json("my-dir", "skill"));
+
+        let content = "# Skill content\n\nSame in both places.\n";
+        setup_dir_cache(dir.path(), "my-dir", content, content);
+        setup_installed_dir(dir.path(), "my-dir", content, content);
+
+        // Should succeed: both cache and installed are identical → prints "is clean"
+        let result = cmd_diff("my-dir", dir.path());
+        assert!(result.is_ok(), "expected Ok but got: {result:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // diff_local_dir — installed files differ from cache → produces diff output
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diff_dir_entry_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock_file(dir.path(), &make_dir_lock_json("my-dir", "skill"));
+
+        // Cache has original content; installed has modified content for file1
+        setup_dir_cache(dir.path(), "my-dir", "original line\n", "unchanged\n");
+        setup_installed_dir(dir.path(), "my-dir", "modified line\n", "unchanged\n");
+
+        // Should succeed: diff output is written to stdout (we just verify no error)
+        let result = cmd_diff("my-dir", dir.path());
+        assert!(result.is_ok(), "expected Ok but got: {result:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // cmd_diff dispatching — github dir entry detected via is_dir_entry
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cmd_diff_dispatches_to_dir_path_for_dir_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        // path_in_repo = "skills/my-dir" (no .md) → is_dir_entry returns true
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock_file(dir.path(), &make_dir_lock_json("my-dir", "skill"));
+
+        // Set up cache and installed with matching content so the dir path succeeds
+        let content = "# Dir skill\n";
+        setup_dir_cache(dir.path(), "my-dir", content, content);
+        setup_installed_dir(dir.path(), "my-dir", content, content);
+
+        // cmd_diff must route to diff_local_dir (not diff_local_single)
+        // and succeed without error
+        let result = cmd_diff("my-dir", dir.path());
+        assert!(
+            result.is_ok(),
+            "expected Ok for dir entry dispatch: {result:?}"
+        );
+    }
 }

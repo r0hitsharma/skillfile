@@ -284,4 +284,105 @@ mod tests {
         // Should succeed without install targets
         cmd_add(entry, dir.path()).unwrap();
     }
+
+    // --- format_line direct tests ---
+
+    #[test]
+    fn format_line_local() {
+        // Name differs from the inferred stem ("foo"), so it must appear in the line.
+        let entry = entry_from_local("skill", "skills/foo.md", Some("my-foo"));
+        let line = format_line(&entry);
+        assert_eq!(line, "local  skill  my-foo  skills/foo.md");
+    }
+
+    #[test]
+    fn format_line_local_inferred_name_omitted() {
+        // When name matches the inferred stem, it is omitted from the line.
+        let entry = entry_from_local("skill", "skills/foo.md", None);
+        let line = format_line(&entry);
+        assert_eq!(line, "local  skill  skills/foo.md");
+    }
+
+    #[test]
+    fn format_line_github() {
+        let entry = entry_from_github(
+            "agent",
+            "owner/repo",
+            "agents/tool.md",
+            Some("v2.0"),
+            Some("my-tool"),
+        );
+        let line = format_line(&entry);
+        assert_eq!(
+            line,
+            "github  agent  my-tool  owner/repo  agents/tool.md  v2.0"
+        );
+    }
+
+    #[test]
+    fn format_line_github_default_ref_omitted() {
+        // When ref is "main" (DEFAULT_REF) it must be omitted from the line.
+        let entry = entry_from_github("skill", "owner/repo", "skills/tool.md", None, Some("tool"));
+        let line = format_line(&entry);
+        assert_eq!(line, "github  skill  owner/repo  skills/tool.md");
+    }
+
+    #[test]
+    fn format_line_url() {
+        // Name differs from the inferred stem ("my-skill"), so it must appear in the line.
+        let entry = entry_from_url(
+            "skill",
+            "https://example.com/my-skill.md",
+            Some("custom-name"),
+        );
+        let line = format_line(&entry);
+        assert_eq!(
+            line,
+            "url  skill  custom-name  https://example.com/my-skill.md"
+        );
+    }
+
+    // --- entry_from_github tests ---
+
+    #[test]
+    fn entry_from_github_default_ref() {
+        let entry = entry_from_github("skill", "o/r", "path.md", None, None);
+        match &entry.source {
+            SourceFields::Github { ref_, .. } => {
+                assert_eq!(
+                    ref_, DEFAULT_REF,
+                    "expected DEFAULT_REF ('main') when ref is None"
+                );
+            }
+            _ => panic!("expected Github source"),
+        }
+    }
+
+    #[test]
+    fn entry_from_github_explicit_ref() {
+        let entry = entry_from_github("skill", "o/r", "path.md", Some("v1.2.3"), None);
+        match &entry.source {
+            SourceFields::Github { ref_, .. } => {
+                assert_eq!(ref_, "v1.2.3");
+            }
+            _ => panic!("expected Github source"),
+        }
+    }
+
+    // --- entry_from_url tests ---
+
+    #[test]
+    fn entry_from_url_inferred_name() {
+        let entry = entry_from_url("skill", "https://example.com/browser-skill.md", None);
+        assert_eq!(
+            entry.name, "browser-skill",
+            "name should be inferred from the URL filename stem"
+        );
+    }
+
+    #[test]
+    fn entry_from_url_explicit_name_overrides_inference() {
+        let entry = entry_from_url("agent", "https://example.com/agent.md", Some("my-agent"));
+        assert_eq!(entry.name, "my-agent");
+    }
 }

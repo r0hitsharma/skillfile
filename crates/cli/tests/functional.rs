@@ -1,12 +1,11 @@
 /// Functional tests: invoke the compiled `skillfile` binary against the real GitHub API.
 ///
-/// These tests are marked `#[ignore]` and require a GitHub token.
-/// Run with: `cargo test --test functional -- --ignored`
-/// Or in CI: set GITHUB_TOKEN or GH_TOKEN, or have `gh auth login` configured.
+/// These tests require a GitHub token and network access.
+/// Set GITHUB_TOKEN or GH_TOKEN, or have `gh auth login` configured.
+/// They fail hard (not skip) when no token is available — same as the Python functional tests.
 ///
 /// The test Skillfile uses the same public repos as the Python functional tests.
 use std::path::Path;
-use std::process::Command;
 
 use assert_cmd::cargo_bin_cmd;
 use predicates::prelude::*;
@@ -32,15 +31,18 @@ fn make_repo() -> tempfile::TempDir {
     dir
 }
 
-/// Check whether a GitHub token is available (env var or `gh auth token`).
+/// Check whether a GitHub token is available via environment variable.
 fn has_github_token() -> bool {
-    if std::env::var("GITHUB_TOKEN").is_ok() || std::env::var("GH_TOKEN").is_ok() {
-        return true;
-    }
-    Command::new("gh")
-        .args(["auth", "token"])
-        .output()
-        .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
+    std::env::var("GITHUB_TOKEN").is_ok() || std::env::var("GH_TOKEN").is_ok()
+}
+
+/// Panic if no GitHub token is available. Functional tests fail hard, not skip.
+fn require_github_token() {
+    assert!(
+        has_github_token(),
+        "GitHub token required for functional tests. \
+         Set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login`."
+    );
 }
 
 /// Run `skillfile <args>` in `dir` and return the Command (pre-configured).
@@ -119,13 +121,12 @@ fn add_then_remove() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests that require network access (marked #[ignore])
+// Tests that require network access (fail hard without token)
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "requires GitHub token and network access"]
 fn sync_golden_path() {
-    assert!(has_github_token(), "GitHub token required");
+    require_github_token();
     let dir = make_repo();
 
     sf(dir.path()).arg("sync").assert().success();
@@ -147,9 +148,8 @@ fn sync_golden_path() {
 }
 
 #[test]
-#[ignore = "requires GitHub token and network access"]
 fn install_golden_path() {
-    assert!(has_github_token(), "GitHub token required");
+    require_github_token();
     let dir = make_repo();
 
     sf(dir.path()).arg("install").assert().success();
@@ -180,9 +180,8 @@ fn install_golden_path() {
 }
 
 #[test]
-#[ignore = "requires GitHub token and network access"]
 fn install_dry_run() {
-    assert!(has_github_token(), "GitHub token required");
+    require_github_token();
     let dir = make_repo();
 
     sf(dir.path())
@@ -203,9 +202,8 @@ fn install_dry_run() {
 }
 
 #[test]
-#[ignore = "requires GitHub token and network access"]
 fn install_update() {
-    assert!(has_github_token(), "GitHub token required");
+    require_github_token();
     let dir = make_repo();
 
     // First install
@@ -220,9 +218,8 @@ fn install_update() {
 }
 
 #[test]
-#[ignore = "requires GitHub token and network access"]
 fn pin_then_unpin() {
-    assert!(has_github_token(), "GitHub token required");
+    require_github_token();
     let dir = make_repo();
 
     // Install first
@@ -261,9 +258,8 @@ fn pin_then_unpin() {
 }
 
 #[test]
-#[ignore = "requires GitHub token and network access"]
 fn status_after_install() {
-    assert!(has_github_token(), "GitHub token required");
+    require_github_token();
     let dir = make_repo();
 
     sf(dir.path()).arg("install").assert().success();

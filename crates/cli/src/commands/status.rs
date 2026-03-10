@@ -374,4 +374,113 @@ mod tests {
         let entry = &manifest.entries[0];
         assert!(!is_modified_local(entry, &manifest, dir.path()));
     }
+
+    // Dir-entry tests: claude-code skills use Nested dir mode (.claude/skills/<name>/)
+
+    /// Build a manifest with a github skill dir entry (path_in_repo without .md).
+    /// claude-code skills are Nested, so installed files live under .claude/skills/<name>/.
+    fn setup_dir_entry(dir: &Path, installed_content: Option<&str>, cache_content: &str) {
+        write_manifest(
+            dir,
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock(
+            dir,
+            &serde_json::json!({"github/skill/my-dir": {"sha": SHA, "raw_url": "https://example.com"}}),
+        );
+
+        // Write the cache vendor dir with a file
+        let vdir = dir.join(".skillfile/cache").join("skills").join("my-dir");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("tool.md"), cache_content).unwrap();
+        std::fs::write(
+            vdir.join(".meta"),
+            serde_json::json!({"sha": SHA}).to_string(),
+        )
+        .unwrap();
+
+        // Write the installed nested dir if content is provided
+        if let Some(content) = installed_content {
+            let installed_dir = dir.join(".claude/skills/my-dir");
+            std::fs::create_dir_all(&installed_dir).unwrap();
+            std::fs::write(installed_dir.join("tool.md"), content).unwrap();
+        }
+    }
+
+    #[test]
+    fn dir_entry_modified_shows_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_dir_entry(dir.path(), Some(MODIFIED), ORIGINAL);
+
+        let result = parse_manifest(&dir.path().join(MANIFEST_NAME)).unwrap();
+        let manifest = result.manifest;
+        let entry = &manifest.entries[0];
+        assert!(
+            is_dir_entry(entry),
+            "expected entry to be recognised as a dir entry"
+        );
+        assert!(
+            is_modified_local(entry, &manifest, dir.path()),
+            "expected modified=true when installed content differs from cache"
+        );
+    }
+
+    #[test]
+    fn dir_entry_clean_shows_not_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_dir_entry(dir.path(), Some(ORIGINAL), ORIGINAL);
+
+        let result = parse_manifest(&dir.path().join(MANIFEST_NAME)).unwrap();
+        let manifest = result.manifest;
+        let entry = &manifest.entries[0];
+        assert!(
+            is_dir_entry(entry),
+            "expected entry to be recognised as a dir entry"
+        );
+        assert!(
+            !is_modified_local(entry, &manifest, dir.path()),
+            "expected modified=false when installed content matches cache"
+        );
+    }
+
+    #[test]
+    fn dir_entry_missing_vendor_dir_not_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write manifest + lock but no vendor cache dir at all
+        write_manifest(
+            dir.path(),
+            "install  claude-code  local\ngithub  skill  my-dir  owner/repo  skills/my-dir  main\n",
+        );
+        write_lock(
+            dir.path(),
+            &serde_json::json!({"github/skill/my-dir": {"sha": SHA, "raw_url": "https://example.com"}}),
+        );
+        // No .skillfile/cache/skills/my-dir/ written
+
+        let result = parse_manifest(&dir.path().join(MANIFEST_NAME)).unwrap();
+        let manifest = result.manifest;
+        let entry = &manifest.entries[0];
+        assert!(
+            is_dir_entry(entry),
+            "expected entry to be recognised as a dir entry"
+        );
+        assert!(
+            !is_modified_local(entry, &manifest, dir.path()),
+            "expected modified=false when vendor cache dir is absent"
+        );
+    }
+
+    #[test]
+    fn local_entry_always_not_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path(), "local  skill  foo  skills/foo.md\n");
+
+        let result = parse_manifest(&dir.path().join(MANIFEST_NAME)).unwrap();
+        let manifest = result.manifest;
+        let entry = &manifest.entries[0];
+        assert!(
+            !is_modified_local(entry, &manifest, dir.path()),
+            "local entries must always report modified=false"
+        );
+    }
 }

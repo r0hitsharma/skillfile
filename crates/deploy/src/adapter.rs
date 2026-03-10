@@ -699,6 +699,330 @@ mod tests {
         );
     }
 
+    // -- deploy_flat --
+
+    #[test]
+    fn deploy_flat_copies_md_files_to_target_dir() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        // Set up vendor cache dir with .md files and a .meta
+        let source_dir = dir.path().join(".skillfile/cache/agents/core-dev");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("backend.md"), "# Backend").unwrap();
+        std::fs::write(source_dir.join("frontend.md"), "# Frontend").unwrap();
+        std::fs::write(source_dir.join(".meta"), "{}").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Agent,
+            name: "core-dev".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "agents/core-dev".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
+            &entry,
+            &source_dir,
+            Scope::Local,
+            dir.path(),
+            &InstallOptions {
+                dry_run: false,
+                overwrite: true,
+            },
+        );
+        // Flat mode: keys are relative paths from source dir
+        assert!(result.contains_key("backend.md"));
+        assert!(result.contains_key("frontend.md"));
+        assert!(!result.contains_key(".meta"));
+        // Files actually exist
+        let target = dir.path().join(".claude/agents");
+        assert!(target.join("backend.md").exists());
+        assert!(target.join("frontend.md").exists());
+    }
+
+    #[test]
+    fn deploy_flat_dry_run_returns_empty() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source_dir = dir.path().join(".skillfile/cache/agents/core-dev");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("backend.md"), "# Backend").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Agent,
+            name: "core-dev".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "agents/core-dev".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
+            &entry,
+            &source_dir,
+            Scope::Local,
+            dir.path(),
+            &InstallOptions {
+                dry_run: true,
+                overwrite: false,
+            },
+        );
+        assert!(result.is_empty());
+        assert!(!dir.path().join(".claude/agents/backend.md").exists());
+    }
+
+    #[test]
+    fn deploy_flat_skips_existing_when_no_overwrite() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source_dir = dir.path().join(".skillfile/cache/agents/core-dev");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("backend.md"), "# New").unwrap();
+
+        // Pre-create the target file
+        let target = dir.path().join(".claude/agents");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("backend.md"), "# Old").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Agent,
+            name: "core-dev".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "agents/core-dev".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
+            &entry,
+            &source_dir,
+            Scope::Local,
+            dir.path(),
+            &InstallOptions {
+                dry_run: false,
+                overwrite: false,
+            },
+        );
+        // Should skip the existing file
+        assert!(result.is_empty());
+        // Original content preserved
+        assert_eq!(
+            std::fs::read_to_string(target.join("backend.md")).unwrap(),
+            "# Old"
+        );
+    }
+
+    #[test]
+    fn deploy_flat_overwrites_existing_when_overwrite_true() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source_dir = dir.path().join(".skillfile/cache/agents/core-dev");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("backend.md"), "# New").unwrap();
+
+        let target = dir.path().join(".claude/agents");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("backend.md"), "# Old").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Agent,
+            name: "core-dev".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "agents/core-dev".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
+            &entry,
+            &source_dir,
+            Scope::Local,
+            dir.path(),
+            &InstallOptions {
+                dry_run: false,
+                overwrite: true,
+            },
+        );
+        assert!(result.contains_key("backend.md"));
+        assert_eq!(
+            std::fs::read_to_string(target.join("backend.md")).unwrap(),
+            "# New"
+        );
+    }
+
+    // -- place_file skip logic --
+
+    #[test]
+    fn place_file_skips_existing_dir_when_no_overwrite() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source_dir = dir.path().join(".skillfile/cache/skills/my-skill");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("SKILL.md"), "# Skill").unwrap();
+
+        // Pre-create the destination dir
+        let dest = dir.path().join(".claude/skills/my-skill");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("OLD.md"), "# Old").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: "my-skill".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "skills/my-skill".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
+            &entry,
+            &source_dir,
+            Scope::Local,
+            dir.path(),
+            &InstallOptions {
+                dry_run: false,
+                overwrite: false,
+            },
+        );
+        // Should skip — dir already exists
+        assert!(result.is_empty());
+        // Old file still there
+        assert!(dest.join("OLD.md").exists());
+    }
+
+    #[test]
+    fn place_file_skips_existing_single_file_when_no_overwrite() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source_file = dir.path().join("skills/my-skill.md");
+        std::fs::create_dir_all(source_file.parent().unwrap()).unwrap();
+        std::fs::write(&source_file, "# New").unwrap();
+
+        let dest = dir.path().join(".claude/skills/my-skill.md");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, "# Old").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Skill,
+            name: "my-skill".into(),
+            source: SourceFields::Local {
+                path: "skills/my-skill.md".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
+            &entry,
+            &source_file,
+            Scope::Local,
+            dir.path(),
+            &InstallOptions {
+                dry_run: false,
+                overwrite: false,
+            },
+        );
+        assert!(result.is_empty());
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "# Old");
+    }
+
+    // -- installed_dir_files flat mode --
+
+    #[test]
+    fn installed_dir_files_flat_mode_returns_deployed_files() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        // Set up vendor cache dir
+        let vdir = dir.path().join(".skillfile/cache/agents/core-dev");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("backend.md"), "# Backend").unwrap();
+        std::fs::write(vdir.join("frontend.md"), "# Frontend").unwrap();
+        std::fs::write(vdir.join(".meta"), "{}").unwrap();
+
+        // Set up installed flat files
+        let target = dir.path().join(".claude/agents");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("backend.md"), "# Backend").unwrap();
+        std::fs::write(target.join("frontend.md"), "# Frontend").unwrap();
+
+        let entry = Entry {
+            entity_type: EntityType::Agent,
+            name: "core-dev".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "agents/core-dev".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let files = a.installed_dir_files(&entry, Scope::Local, dir.path());
+        assert!(files.contains_key("backend.md"));
+        assert!(files.contains_key("frontend.md"));
+        assert!(!files.contains_key(".meta"));
+    }
+
+    #[test]
+    fn installed_dir_files_flat_mode_no_vdir_returns_empty() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        // No vendor cache dir
+        let entry = Entry {
+            entity_type: EntityType::Agent,
+            name: "core-dev".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "agents/core-dev".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let files = a.installed_dir_files(&entry, Scope::Local, dir.path());
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn installed_dir_files_flat_mode_skips_non_deployed_files() {
+        use skillfile_core::models::{EntityType, SourceFields};
+
+        let dir = tempfile::tempdir().unwrap();
+        let vdir = dir.path().join(".skillfile/cache/agents/core-dev");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("backend.md"), "# Backend").unwrap();
+        std::fs::write(vdir.join("frontend.md"), "# Frontend").unwrap();
+
+        // Only deploy one file
+        let target = dir.path().join(".claude/agents");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("backend.md"), "# Backend").unwrap();
+        // frontend.md NOT deployed
+
+        let entry = Entry {
+            entity_type: EntityType::Agent,
+            name: "core-dev".into(),
+            source: SourceFields::Github {
+                owner_repo: "o/r".into(),
+                path_in_repo: "agents/core-dev".into(),
+                ref_: "main".into(),
+            },
+        };
+        let a = adapters().get("claude-code").unwrap();
+        let files = a.installed_dir_files(&entry, Scope::Local, dir.path());
+        assert!(files.contains_key("backend.md"));
+        assert!(!files.contains_key("frontend.md"));
+    }
+
     #[test]
     fn deploy_entry_dir_keys_match_source_relative_paths() {
         use skillfile_core::models::{EntityType, SourceFields};
