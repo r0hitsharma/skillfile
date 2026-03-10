@@ -5,6 +5,7 @@ use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock, write_lock};
 use skillfile_core::models::{short_sha, Entry, LockEntry, SourceFields};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
+use skillfile_core::{progress, progress_inline};
 
 use crate::http::{HttpClient, UreqClient};
 use crate::resolver::{
@@ -63,7 +64,7 @@ pub fn sync_entry(
 ) -> Result<(), SkillfileError> {
     match &entry.source {
         SourceFields::Local { .. } => {
-            eprintln!("  {entry}: local — skipping");
+            progress!("  {entry}: local — skipping");
             Ok(())
         }
         SourceFields::Github { .. } => sync_github(client, entry, ctx, locked),
@@ -100,42 +101,42 @@ fn sync_github(
     // Skip if locked SHA matches meta and content exists
     if let Some(ref ls) = locked_sha {
         if meta.as_deref() == Some(ls.as_str()) && has_content {
-            eprintln!("{label}: up to date (sha={})", short_sha(ls));
+            progress!("{label}: up to date (sha={})", short_sha(ls));
             return Ok(());
         }
     }
 
     // Resolve SHA
     let sha = if let Some(ref ls) = locked_sha {
-        eprint!("{label}: re-fetching (locked sha={}) ...", short_sha(ls));
+        progress_inline!("{label}: re-fetching (locked sha={}) ...", short_sha(ls));
         ls.clone()
     } else {
-        eprint!("{label}: resolving {owner_repo}@{ref_} ...");
+        progress_inline!("{label}: resolving {owner_repo}@{ref_} ...");
         if ctx.dry_run {
-            eprintln!(" [dry-run]");
+            progress!(" [dry-run]");
             return Ok(());
         }
         let cache_key = (owner_repo.to_string(), ref_.to_string());
         if let Some(cached) = ctx.sha_cache.get(&cache_key) {
             let sha = cached.clone();
-            eprint!(" sha={} (cached)", short_sha(&sha));
+            progress_inline!(" sha={} (cached)", short_sha(&sha));
             sha
         } else {
             let sha = resolve_github_sha(client, owner_repo, ref_)?;
-            eprint!(" sha={}", short_sha(&sha));
+            progress_inline!(" sha={}", short_sha(&sha));
             ctx.sha_cache.insert(cache_key, sha.clone());
             sha
         }
     };
 
     if ctx.dry_run {
-        eprintln!(" [dry-run]");
+        progress!(" [dry-run]");
         return Ok(());
     }
 
     // After resolving SHA on --update, skip download if cache is current
     if ctx.update && meta.as_deref() == Some(sha.as_str()) && has_content {
-        eprintln!(" up to date");
+        progress!(" up to date");
         let raw_url = locked
             .get(&key)
             .map(|le| le.raw_url.clone())
@@ -157,7 +158,7 @@ fn sync_github(
             }
             std::fs::write(&dest, content.as_bytes())?;
         }
-        eprintln!(" -> {}/ ({} files)", vdir.display(), fetched.len());
+        progress!(" -> {}/ ({} files)", vdir.display(), fetched.len());
         format!("https://api.github.com/repos/{owner_repo}/contents/{path_in_repo}?ref={sha}")
     } else {
         let content = fetch_github_file(client, owner_repo, path_in_repo, &sha)?;
@@ -172,7 +173,7 @@ fn sync_github(
             .unwrap_or("content.md");
         let dest = vdir.join(filename);
         std::fs::write(&dest, &content)?;
-        eprintln!(" -> {}", dest.display());
+        progress!(" -> {}", dest.display());
         format!("https://raw.githubusercontent.com/{owner_repo}/{sha}/{effective_path}")
     };
 
@@ -205,10 +206,10 @@ fn sync_url(
     let label = format!("  {entry}");
     let vdir = vendor_dir_for(entry, &ctx.repo_root);
 
-    eprint!("{label}: fetching {url} ...");
+    progress_inline!("{label}: fetching {url} ...");
 
     if ctx.dry_run {
-        eprintln!(" [dry-run]");
+        progress!(" [dry-run]");
         return Ok(());
     }
 
@@ -231,7 +232,7 @@ fn sync_url(
             + "\n",
     )?;
 
-    eprintln!(" -> {}", vdir.join(filename).display());
+    progress!(" -> {}", vdir.join(filename).display());
     // URL entries don't have SHA-based locking
     Ok(())
 }
@@ -275,7 +276,7 @@ pub fn cmd_sync(
     let mode = if dry_run { " [dry-run]" } else { "" };
     let count = entries.len();
     let noun = if count == 1 { "entry" } else { "entries" };
-    eprintln!("Syncing {count} {noun}{mode}...");
+    progress!("Syncing {count} {noun}{mode}...");
 
     let mut locked = read_lock(repo_root)?;
     let client = UreqClient::new();
@@ -292,7 +293,7 @@ pub fn cmd_sync(
 
     if !dry_run {
         write_lock(repo_root, &locked)?;
-        eprintln!("Done.");
+        progress!("Done.");
     }
 
     Ok(())

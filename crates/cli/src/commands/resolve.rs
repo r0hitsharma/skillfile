@@ -5,6 +5,7 @@ use skillfile_core::conflict::{clear_conflict, read_conflict};
 use skillfile_core::error::SkillfileError;
 use skillfile_core::models::{short_sha, ConflictState};
 use skillfile_core::parser::{find_entry_in, parse_manifest, MANIFEST_NAME};
+use skillfile_core::progress;
 use skillfile_deploy::paths::{installed_dir_files, installed_path};
 use skillfile_sources::strategy::is_dir_entry;
 use skillfile_sources::sync::{fetch_dir_at_sha, fetch_file_at_sha};
@@ -101,19 +102,19 @@ fn resolve_single_file(
     let filename = format!("{}.md", entry.name);
     let client = skillfile_sources::http::UreqClient::new();
 
-    eprintln!(
+    progress!(
         "  fetching upstream at old sha={} (common ancestor) ...",
         short_sha(&conflict.old_sha)
     );
     let base = fetch_file_at_sha(&client, entry, &conflict.old_sha)?;
-    eprintln!("done");
+    progress!("done");
 
-    eprintln!(
+    progress!(
         "  fetching upstream at new sha={} ...",
         short_sha(&conflict.new_sha)
     );
     let theirs = fetch_file_at_sha(&client, entry, &conflict.new_sha)?;
-    eprintln!("done");
+    progress!("done");
 
     let result = parse_manifest(&repo_root.join(MANIFEST_NAME))?;
     let installed = installed_path(entry, &result.manifest, repo_root)?;
@@ -133,7 +134,7 @@ fn resolve_single_file(
         std::fs::read_to_string(&installed)?
     };
 
-    eprintln!("  merging ...");
+    progress!("  merging ...");
     let (mut merged, has_conflicts) = three_way_merge(&base, &theirs, &yours, &filename)?;
 
     if has_conflicts {
@@ -149,7 +150,7 @@ fn resolve_single_file(
             return Ok(());
         }
     } else {
-        eprintln!("  clean merge — no conflicts in '{}'", entry.name);
+        progress!("  clean merge — no conflicts in '{}'", entry.name);
     }
 
     // Write merged result to installed path
@@ -159,10 +160,10 @@ fn resolve_single_file(
     let patch_text = generate_patch(&theirs, &merged, &filename);
     if !patch_text.is_empty() {
         write_patch(entry, &patch_text, repo_root)?;
-        eprintln!("  updated .skillfile/patches/ for '{}'", entry.name);
+        progress!("  updated .skillfile/patches/ for '{}'", entry.name);
     } else {
         remove_patch(entry, repo_root)?;
-        eprintln!(
+        progress!(
             "  merged result matches upstream — removed pin for '{}'",
             entry.name
         );
@@ -183,19 +184,19 @@ fn resolve_dir_entry(
 ) -> Result<(), SkillfileError> {
     let client = skillfile_sources::http::UreqClient::new();
 
-    eprintln!(
+    progress!(
         "  fetching upstream at old sha={} (common ancestor) ...",
         short_sha(&conflict.old_sha)
     );
     let base_files = fetch_dir_at_sha(&client, entry, &conflict.old_sha)?;
-    eprintln!("done");
+    progress!("done");
 
-    eprintln!(
+    progress!(
         "  fetching upstream at new sha={} ...",
         short_sha(&conflict.new_sha)
     );
     let theirs_files = fetch_dir_at_sha(&client, entry, &conflict.new_sha)?;
-    eprintln!("done");
+    progress!("done");
 
     let result = parse_manifest(&repo_root.join(MANIFEST_NAME))?;
     let installed = installed_dir_files(entry, &result.manifest, repo_root)?;
@@ -248,14 +249,14 @@ fn resolve_dir_entry(
                 return Ok(());
             }
         } else {
-            eprintln!("  {filename}: clean merge");
+            progress!("  {filename}: clean merge");
         }
 
         merged_results.insert(filename.clone(), merged);
     }
 
     if !any_conflict {
-        eprintln!("  all files merged cleanly in '{}'", entry.name);
+        progress!("  all files merged cleanly in '{}'", entry.name);
     }
 
     // Write merged results and update patches
@@ -274,13 +275,13 @@ fn resolve_dir_entry(
     }
 
     if !pinned.is_empty() {
-        eprintln!(
+        progress!(
             "  updated .skillfile/patches/ for '{}' ({})",
             entry.name,
             pinned.join(", ")
         );
     } else {
-        eprintln!(
+        progress!(
             "  merged result matches upstream — no pin needed for '{}'",
             entry.name
         );

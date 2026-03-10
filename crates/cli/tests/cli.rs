@@ -69,7 +69,7 @@ fn validate_golden_path() {
 }
 
 #[test]
-fn sort_golden_path() {
+fn format_golden_path() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("Skillfile"),
@@ -79,7 +79,7 @@ fn sort_golden_path() {
     )
     .unwrap();
 
-    sf(dir.path()).arg("sort").assert().success();
+    sf(dir.path()).arg("format").assert().success();
 
     let text = std::fs::read_to_string(dir.path().join("Skillfile")).unwrap();
     let entry_lines: Vec<&str> = text.lines().filter(|l| l.starts_with("github")).collect();

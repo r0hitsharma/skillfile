@@ -147,7 +147,7 @@ pub fn sorted_manifest_text(manifest: &Manifest, raw_text: &str) -> String {
     lines.join("\n") + "\n"
 }
 
-pub fn cmd_sort(repo_root: &Path, dry_run: bool) -> Result<(), SkillfileError> {
+pub fn cmd_format(repo_root: &Path, dry_run: bool) -> Result<(), SkillfileError> {
     let manifest_path = repo_root.join(MANIFEST_NAME);
     if !manifest_path.exists() {
         return Err(SkillfileError::Manifest(format!(
@@ -169,7 +169,7 @@ pub fn cmd_sort(repo_root: &Path, dry_run: bool) -> Result<(), SkillfileError> {
     std::fs::write(&manifest_path, &text)?;
     let n = manifest.entries.len();
     let word = if n == 1 { "entry" } else { "entries" };
-    println!("Sorted {n} {word}.");
+    println!("Formatted {n} {word}.");
 
     Ok(())
 }
@@ -283,13 +283,13 @@ mod tests {
     }
 
     #[test]
-    fn cmd_sort_rewrites_file() {
+    fn cmd_format_rewrites_file() {
         let dir = tempfile::tempdir().unwrap();
         write_manifest(
             dir.path(),
             "github  skill  z/repo  z.md\ngithub  skill  a/repo  a.md\n",
         );
-        cmd_sort(dir.path(), false).unwrap();
+        cmd_format(dir.path(), false).unwrap();
         let text = std::fs::read_to_string(dir.path().join(MANIFEST_NAME)).unwrap();
         let skill_lines: Vec<&str> = text.lines().filter(|l| l.starts_with("github")).collect();
         assert_eq!(skill_lines[0], "github  skill  a/repo  a.md");
@@ -297,11 +297,11 @@ mod tests {
     }
 
     #[test]
-    fn cmd_sort_dry_run_does_not_write() {
+    fn cmd_format_dry_run_does_not_write() {
         let dir = tempfile::tempdir().unwrap();
         let original = "github  skill  z/repo  z.md\ngithub  skill  a/repo  a.md\n";
         write_manifest(dir.path(), original);
-        cmd_sort(dir.path(), true).unwrap();
+        cmd_format(dir.path(), true).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.path().join(MANIFEST_NAME)).unwrap(),
             original
@@ -309,9 +309,9 @@ mod tests {
     }
 
     #[test]
-    fn cmd_sort_no_manifest() {
+    fn cmd_format_no_manifest() {
         let dir = tempfile::tempdir().unwrap();
-        let result = cmd_sort(dir.path(), false);
+        let result = cmd_format(dir.path(), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }

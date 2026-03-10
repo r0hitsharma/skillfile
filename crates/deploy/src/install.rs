@@ -12,6 +12,7 @@ use skillfile_core::patch::{
     apply_patch_pure, dir_patch_path, generate_patch, has_patch, patches_root, read_patch,
     remove_patch, walkdir, write_dir_patch, write_patch,
 };
+use skillfile_core::progress;
 use skillfile_sources::strategy::{content_file, is_dir_entry};
 use skillfile_sources::sync::{cmd_sync, vendor_dir_for};
 
@@ -179,7 +180,7 @@ fn auto_pin_entry(entry: &Entry, manifest: &Manifest, repo_root: &Path) {
 
     let patch_text = generate_patch(&cache_text, &installed_text, &format!("{}.md", entry.name));
     if !patch_text.is_empty() && write_patch(entry, &patch_text, repo_root).is_ok() {
-        eprintln!(
+        progress!(
             "  {}: local changes auto-saved to .skillfile/patches/",
             entry.name
         );
@@ -244,7 +245,7 @@ fn auto_pin_dir_entry(entry: &Entry, manifest: &Manifest, repo_root: &Path, vdir
     }
 
     if !pinned.is_empty() {
-        eprintln!(
+        progress!(
             "  {}: local changes auto-saved to .skillfile/patches/ ({})",
             entry.name,
             pinned.join(", ")
@@ -349,9 +350,10 @@ fn deploy_all(
             eprintln!("warning: unknown platform '{}', skipping", target.adapter);
             continue;
         }
-        eprintln!(
+        progress!(
             "Installing for {} ({}){mode}...",
-            target.adapter, target.scope
+            target.adapter,
+            target.scope
         );
         for entry in &manifest.entries {
             match install_entry(entry, target, repo_root, Some(opts)) {
@@ -449,7 +451,7 @@ pub fn cmd_install(repo_root: &Path, dry_run: bool, update: bool) -> Result<(), 
     deploy_all(&manifest, repo_root, &opts, &locked, &old_locked)?;
 
     if !dry_run {
-        eprintln!("Done.");
+        progress!("Done.");
     }
 
     Ok(())

@@ -107,7 +107,7 @@ Line-oriented, space-delimited, human-editable. No YAML, no TOML. Names are infe
 | Command | Description | Key flags |
 |---|---|---|
 | `validate` | Check for syntax errors, duplicates, orphans | |
-| `sort` | Sort entries into a standard order | `--dry-run` |
+| `format` | Format and sort entries into a standard order | `--dry-run` |
 
 ### Customization
 

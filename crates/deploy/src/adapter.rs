@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 use skillfile_core::models::{Entry, InstallOptions, Scope};
 use skillfile_core::patch::walkdir;
+use skillfile_core::progress;
 use skillfile_sources::strategy::is_dir_entry;
 
 // ---------------------------------------------------------------------------
@@ -255,7 +256,7 @@ fn deploy_flat(source_dir: &Path, target_dir: &Path, opts: &InstallOptions) -> D
     if opts.dry_run {
         for src in &md_files {
             if let Some(name) = src.file_name() {
-                eprintln!(
+                progress!(
                     "  {} -> {} [copy, dry-run]",
                     name.to_string_lossy(),
                     target_dir.join(name).display()
@@ -279,7 +280,7 @@ fn deploy_flat(source_dir: &Path, target_dir: &Path, opts: &InstallOptions) -> D
             std::fs::remove_file(&dest).ok();
         }
         if std::fs::copy(src, &dest).is_ok() {
-            eprintln!("  {} -> {}", name.to_string_lossy(), dest.display());
+            progress!("  {} -> {}", name.to_string_lossy(), dest.display());
             if let Ok(rel) = src.strip_prefix(source_dir) {
                 result.insert(rel.to_string_lossy().to_string(), dest);
             }
@@ -306,7 +307,7 @@ fn place_file(source: &Path, dest: &Path, is_dir: bool, opts: &InstallOptions) -
     );
 
     if opts.dry_run {
-        eprintln!("{label} [copy, dry-run]");
+        progress!("{label} [copy, dry-run]");
         return true;
     }
 
@@ -329,7 +330,7 @@ fn place_file(source: &Path, dest: &Path, is_dir: bool, opts: &InstallOptions) -
         std::fs::copy(source, dest).ok();
     }
 
-    eprintln!("{label}");
+    progress!("{label}");
     true
 }
 

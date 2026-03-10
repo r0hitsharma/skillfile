@@ -85,7 +85,7 @@ All notable changes to skillfile are documented here.
 - **`skillfile add`** — add an entry to the Skillfile without hand-editing it
 - **`skillfile remove`** — remove an entry and clear its cache
 - **`skillfile validate`** — check the Skillfile for syntax errors, unknown platforms, and duplicate names
-- **`skillfile sort`** — sort and normalise the Skillfile
+- **`skillfile format`** — format and sort the Skillfile
 - Directory entries — a GitHub path can now point to a directory; all files are fetched and deployed individually
 
 ---

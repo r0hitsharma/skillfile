@@ -5,6 +5,8 @@ use skillfile_core::lock::{read_lock, write_lock};
 use skillfile_core::models::{EntityType, Entry, SourceFields, DEFAULT_REF};
 use skillfile_core::parser::{infer_name, parse_manifest, MANIFEST_NAME};
 use skillfile_deploy::adapter::adapters;
+
+use super::format::sorted_manifest_text;
 use skillfile_deploy::install::install_entry;
 use skillfile_sources::strategy::format_parts;
 use skillfile_sources::sync::{sync_entry, SyncContext};
@@ -94,6 +96,11 @@ pub fn cmd_add(entry: Entry, repo_root: &Path) -> Result<(), SkillfileError> {
     content.push_str(&line);
     content.push('\n');
     std::fs::write(&manifest_path, &content)?;
+
+    // Auto-format the Skillfile silently
+    let result = parse_manifest(&manifest_path)?;
+    let formatted = sorted_manifest_text(&result.manifest, &content);
+    std::fs::write(&manifest_path, &formatted)?;
 
     println!("Added: {line}");
 

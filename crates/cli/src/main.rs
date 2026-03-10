@@ -32,11 +32,16 @@ Quick start:
     version,
     after_long_help = "\
 ENVIRONMENT VARIABLES:
-  GITHUB_TOKEN, GH_TOKEN   GitHub API token for SHA resolution and private repos
-  MERGETOOL                 Merge tool for `skillfile resolve` (default: $EDITOR)
-  EDITOR                    Fallback editor for `skillfile resolve`"
+  SKILLFILE_QUIET            Suppress progress output (same as --quiet)
+  GITHUB_TOKEN, GH_TOKEN    GitHub API token for SHA resolution and private repos
+  MERGETOOL                  Merge tool for `skillfile resolve` (default: $EDITOR)
+  EDITOR                     Fallback editor for `skillfile resolve`"
 )]
 struct Cli {
+    /// Suppress progress output (or set SKILLFILE_QUIET=1)
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -162,17 +167,17 @@ Examples:
   skillfile validate")]
     Validate,
 
-    /// Sort entries in the Skillfile into a standard order
+    /// Format and sort entries in the Skillfile into a standard order
     #[command(display_order = 31)]
     #[command(long_about = "\
-Sort and canonicalize the Skillfile in-place. Entries are ordered by source
+Format and canonicalize the Skillfile in-place. Entries are ordered by source
 type, then entity type, then name. Install lines come first.
 
 Examples:
-  skillfile sort
-  skillfile sort --dry-run")]
-    Sort {
-        /// Print sorted output without writing
+  skillfile format
+  skillfile format --dry-run")]
+    Format {
+        /// Print formatted output without writing
         #[arg(long)]
         dry_run: bool,
     },
@@ -291,6 +296,8 @@ enum AddSource {
 
 fn run() -> Result<(), SkillfileError> {
     let cli = Cli::parse();
+    let quiet = cli.quiet || std::env::var("SKILLFILE_QUIET").is_ok_and(|v| !v.is_empty());
+    skillfile_core::output::set_quiet(quiet);
     let repo_root = PathBuf::from(".");
 
     match cli.command {
@@ -344,8 +351,8 @@ fn run() -> Result<(), SkillfileError> {
         Command::Validate => {
             commands::validate::cmd_validate(&repo_root)?;
         }
-        Command::Sort { dry_run } => {
-            commands::sort::cmd_sort(&repo_root, dry_run)?;
+        Command::Format { dry_run } => {
+            commands::format::cmd_format(&repo_root, dry_run)?;
         }
         Command::Pin { name, dry_run } => {
             commands::pin::cmd_pin(&name, &repo_root, dry_run)?;

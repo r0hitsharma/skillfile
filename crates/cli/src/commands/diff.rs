@@ -6,6 +6,7 @@ use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock};
 use skillfile_core::models::{short_sha, Entry};
 use skillfile_core::parser::{find_entry_in, parse_manifest, MANIFEST_NAME};
+use skillfile_core::progress;
 use skillfile_deploy::paths::{installed_dir_files, installed_path};
 use skillfile_sources::strategy::{content_file, is_dir_entry};
 use skillfile_sources::sync::vendor_dir_for;
@@ -169,7 +170,7 @@ fn diff_conflict(
 ) -> Result<(), SkillfileError> {
     // Conflict mode: fetch old and new upstream, show upstream delta
     // This requires network access
-    eprintln!(
+    progress!(
         "  fetching upstream at old sha={} ...",
         short_sha(&conflict.old_sha)
     );
@@ -189,13 +190,13 @@ fn diff_conflict_single(
     client: &dyn skillfile_sources::http::HttpClient,
 ) -> Result<(), SkillfileError> {
     let old_content = skillfile_sources::sync::fetch_file_at_sha(client, entry, &conflict.old_sha)?;
-    eprintln!("done");
-    eprintln!(
+    progress!("done");
+    progress!(
         "  fetching upstream at new sha={} ...",
         short_sha(&conflict.new_sha)
     );
     let new_content = skillfile_sources::sync::fetch_file_at_sha(client, entry, &conflict.new_sha)?;
-    eprintln!("done\n");
+    progress!("done\n");
 
     let diff_text = similar::TextDiff::from_lines(old_content.as_str(), new_content.as_str());
     let formatted = format!(
@@ -230,13 +231,13 @@ fn diff_conflict_dir(
     client: &dyn skillfile_sources::http::HttpClient,
 ) -> Result<(), SkillfileError> {
     let old_files = skillfile_sources::sync::fetch_dir_at_sha(client, entry, &conflict.old_sha)?;
-    eprintln!("done");
-    eprintln!(
+    progress!("done");
+    progress!(
         "  fetching upstream at new sha={} ...",
         short_sha(&conflict.new_sha)
     );
     let new_files = skillfile_sources::sync::fetch_dir_at_sha(client, entry, &conflict.new_sha)?;
-    eprintln!("done\n");
+    progress!("done\n");
 
     let mut all_filenames: Vec<String> = old_files
         .keys()
