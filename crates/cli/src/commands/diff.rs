@@ -172,17 +172,17 @@ fn diff_conflict(
     _repo_root: &Path,
 ) -> Result<(), SkillfileError> {
     // Conflict mode: fetch old and new upstream, show upstream delta
-    // This requires network access — uses ureq
+    // This requires network access
     eprintln!(
         "  fetching upstream at old sha={} ...",
         &conflict.old_sha[..conflict.old_sha.len().min(12)]
     );
-    let agent = ureq::Agent::new_with_defaults();
+    let client = skillfile_sources::http::UreqClient::new();
 
     if is_dir_entry(entry) {
-        diff_conflict_dir(entry, conflict, &agent)?;
+        diff_conflict_dir(entry, conflict, &client)?;
     } else {
-        diff_conflict_single(entry, conflict, &agent)?;
+        diff_conflict_single(entry, conflict, &client)?;
     }
     Ok(())
 }
@@ -190,15 +190,15 @@ fn diff_conflict(
 fn diff_conflict_single(
     entry: &Entry,
     conflict: &skillfile_core::models::ConflictState,
-    agent: &ureq::Agent,
+    client: &dyn skillfile_sources::http::HttpClient,
 ) -> Result<(), SkillfileError> {
-    let old_content = skillfile_sources::sync::fetch_file_at_sha(agent, entry, &conflict.old_sha)?;
+    let old_content = skillfile_sources::sync::fetch_file_at_sha(client, entry, &conflict.old_sha)?;
     eprintln!("done");
     eprintln!(
         "  fetching upstream at new sha={} ...",
         &conflict.new_sha[..conflict.new_sha.len().min(12)]
     );
-    let new_content = skillfile_sources::sync::fetch_file_at_sha(agent, entry, &conflict.new_sha)?;
+    let new_content = skillfile_sources::sync::fetch_file_at_sha(client, entry, &conflict.new_sha)?;
     eprintln!("done\n");
 
     let diff_text = similar::TextDiff::from_lines(old_content.as_str(), new_content.as_str());
@@ -231,15 +231,15 @@ fn diff_conflict_single(
 fn diff_conflict_dir(
     entry: &Entry,
     conflict: &skillfile_core::models::ConflictState,
-    agent: &ureq::Agent,
+    client: &dyn skillfile_sources::http::HttpClient,
 ) -> Result<(), SkillfileError> {
-    let old_files = skillfile_sources::sync::fetch_dir_at_sha(agent, entry, &conflict.old_sha)?;
+    let old_files = skillfile_sources::sync::fetch_dir_at_sha(client, entry, &conflict.old_sha)?;
     eprintln!("done");
     eprintln!(
         "  fetching upstream at new sha={} ...",
         &conflict.new_sha[..conflict.new_sha.len().min(12)]
     );
-    let new_files = skillfile_sources::sync::fetch_dir_at_sha(agent, entry, &conflict.new_sha)?;
+    let new_files = skillfile_sources::sync::fetch_dir_at_sha(client, entry, &conflict.new_sha)?;
     eprintln!("done\n");
 
     let mut all_filenames: Vec<String> = old_files

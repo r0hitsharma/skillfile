@@ -289,7 +289,7 @@ pub fn install_entry(
     };
 
     let is_dir = is_dir_entry(entry);
-    let installed = adapter.deploy_entry(entry, &source, &target.scope, repo_root, opts);
+    let installed = adapter.deploy_entry(entry, &source, target.scope, repo_root, opts);
 
     if !installed.is_empty() && !opts.dry_run {
         if is_dir {
@@ -343,7 +343,7 @@ fn deploy_all(
     let all_adapters = adapters();
 
     for target in &manifest.install_targets {
-        if !all_adapters.contains_key(&target.adapter) {
+        if !all_adapters.contains(&target.adapter) {
             eprintln!("warning: unknown platform '{}', skipping", target.adapter);
             continue;
         }
@@ -460,7 +460,7 @@ pub fn cmd_install(repo_root: &Path, dry_run: bool, update: bool) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skillfile_core::models::{Entry, InstallTarget, SourceFields};
+    use skillfile_core::models::{Entry, InstallTarget, Scope, SourceFields};
 
     fn make_agent_entry(name: &str) -> Entry {
         Entry {
@@ -482,10 +482,10 @@ mod tests {
         }
     }
 
-    fn make_target(adapter: &str, scope: &str) -> InstallTarget {
+    fn make_target(adapter: &str, scope: Scope) -> InstallTarget {
         InstallTarget {
             adapter: adapter.into(),
-            scope: scope.into(),
+            scope,
         }
     }
 
@@ -499,7 +499,7 @@ mod tests {
         std::fs::write(&source_file, "# My Skill").unwrap();
 
         let entry = make_local_entry("my-skill", "skills/my-skill.md");
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         let dest = dir.path().join(".claude/skills/my-skill.md");
@@ -515,7 +515,7 @@ mod tests {
         std::fs::write(&source_file, "# My Skill").unwrap();
 
         let entry = make_local_entry("my-skill", "skills/my-skill.md");
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         let opts = InstallOptions {
             dry_run: true,
             ..Default::default()
@@ -539,7 +539,7 @@ mod tests {
         std::fs::write(&dest, "# Old content").unwrap();
 
         let entry = make_local_entry("my-skill", "skills/my-skill.md");
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "# New content");
@@ -555,7 +555,7 @@ mod tests {
         std::fs::write(vdir.join("agent.md"), "# Agent").unwrap();
 
         let entry = make_agent_entry("my-agent");
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         let dest = dir.path().join(".claude/agents/my-agent.md");
@@ -580,7 +580,7 @@ mod tests {
                 ref_: "main".into(),
             },
         };
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         let dest = dir.path().join(".claude/skills/python-pro");
@@ -609,7 +609,7 @@ mod tests {
                 ref_: "main".into(),
             },
         };
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         let agents_dir = dir.path().join(".claude/agents");
@@ -629,7 +629,7 @@ mod tests {
     fn install_entry_missing_source_warns() {
         let dir = tempfile::tempdir().unwrap();
         let entry = make_agent_entry("my-agent");
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
 
         // Should return Ok without error — just a warning
         install_entry(&entry, &target, dir.path(), None).unwrap();
@@ -645,7 +645,7 @@ mod tests {
                 path: "hooks/my-hook.md".into(),
             },
         };
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         assert!(!dir.path().join(".claude").exists());
@@ -679,7 +679,7 @@ mod tests {
         );
         skillfile_core::patch::write_patch(&entry, &patch_text, dir.path()).unwrap();
 
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         let dest = dir.path().join(".claude/skills/test.md");
@@ -721,7 +721,7 @@ mod tests {
         )
         .unwrap();
 
-        let target = make_target("claude-code", "local");
+        let target = make_target("claude-code", Scope::Local);
         let result = install_entry(&entry, &target, dir.path(), None);
         assert!(result.is_err());
         // Should be a PatchConflict error
@@ -738,7 +738,7 @@ mod tests {
         std::fs::write(&source_file, "# My Skill").unwrap();
 
         let entry = make_local_entry("my-skill", "skills/my-skill.md");
-        let target = make_target("gemini-cli", "local");
+        let target = make_target("gemini-cli", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         let dest = dir.path().join(".gemini/skills/my-skill.md");
@@ -754,7 +754,7 @@ mod tests {
         std::fs::write(&source_file, "# My Skill").unwrap();
 
         let entry = make_local_entry("my-skill", "skills/my-skill.md");
-        let target = make_target("codex", "local");
+        let target = make_target("codex", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         let dest = dir.path().join(".codex/skills/my-skill.md");
@@ -766,7 +766,7 @@ mod tests {
     fn codex_skips_agent_entries() {
         let dir = tempfile::tempdir().unwrap();
         let entry = make_agent_entry("my-agent");
-        let target = make_target("codex", "local");
+        let target = make_target("codex", Scope::Local);
         install_entry(&entry, &target, dir.path(), None).unwrap();
 
         assert!(!dir.path().join(".codex").exists());
@@ -780,7 +780,7 @@ mod tests {
         std::fs::write(vdir.join("agent.md"), "# Agent").unwrap();
 
         let entry = make_agent_entry("my-agent");
-        let target = make_target("gemini-cli", "local");
+        let target = make_target("gemini-cli", Scope::Local);
         install_entry(
             &entry,
             &target,
@@ -803,7 +803,7 @@ mod tests {
             std::fs::write(&source_file, "# Multi Skill").unwrap();
 
             let entry = make_local_entry("my-skill", "skills/my-skill.md");
-            let target = make_target(adapter, "local");
+            let target = make_target(adapter, Scope::Local);
             install_entry(&entry, &target, dir.path(), None).unwrap();
 
             let prefix = match *adapter {

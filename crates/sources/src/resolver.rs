@@ -3,6 +3,8 @@ use std::sync::OnceLock;
 
 use skillfile_core::error::SkillfileError;
 
+use crate::http::HttpClient;
+
 static TOKEN_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
 /// Discover a GitHub token from environment or `gh` CLI. Cached after first call.
@@ -36,74 +38,39 @@ pub fn github_token() -> Option<&'static str> {
         .as_deref()
 }
 
-/// Build an HTTP GET request with standard headers (User-Agent, optional Authorization).
-fn build_get(agent: &ureq::Agent, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
-    let mut req = agent.get(url).header("User-Agent", "skillfile/1.0");
-    if let Some(token) = github_token() {
-        req = req.header("Authorization", &format!("Bearer {token}"));
-    }
-    req
-}
-
 /// Perform an HTTP GET and return the response body as bytes.
-pub fn http_get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, SkillfileError> {
-    let mut response = build_get(agent, url).call().map_err(|e| match &e {
-        ureq::Error::StatusCode(404) => SkillfileError::Network(format!(
-            "HTTP 404: {url} not found — check that the path exists in the upstream repo"
-        )),
-        ureq::Error::StatusCode(code) => {
-            SkillfileError::Network(format!("HTTP {code} fetching {url}"))
-        }
-        _ => SkillfileError::Network(format!("{e} fetching {url}")),
-    })?;
-    let bytes = response
-        .body_mut()
-        .read_to_vec()
-        .map_err(|e| SkillfileError::Network(format!("failed to read response from {url}: {e}")))?;
-    Ok(bytes)
+pub fn http_get(client: &dyn HttpClient, url: &str) -> Result<Vec<u8>, SkillfileError> {
+    client.get_bytes(url)
 }
 
 /// Try to resolve a git ref to a commit SHA. Returns `None` on 4xx.
 fn try_resolve_sha(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
     owner_repo: &str,
     ref_: &str,
 ) -> Result<Option<String>, SkillfileError> {
     let url = format!("https://api.github.com/repos/{owner_repo}/commits/{ref_}");
-    let result = build_get(agent, &url)
-        .header("Accept", "application/vnd.github.v3+json")
-        .call();
-
-    match result {
-        Ok(mut response) => {
-            let text = response.body_mut().read_to_string().map_err(|e| {
-                SkillfileError::Network(format!(
-                    "failed to read SHA response for {owner_repo}@{ref_}: {e}"
-                ))
-            })?;
-            let data: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-                SkillfileError::Network(format!(
-                    "invalid JSON in SHA response for {owner_repo}@{ref_}: {e}"
-                ))
-            })?;
-            Ok(data["sha"].as_str().map(|s| s.to_string()))
-        }
-        Err(ureq::Error::StatusCode(code)) if (400..500).contains(&code) => Ok(None),
-        Err(e) => Err(SkillfileError::Network(format!(
-            "could not resolve {owner_repo}@{ref_}: {e}"
-        ))),
-    }
+    let text = match client.get_json(&url)? {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    let data: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        SkillfileError::Network(format!(
+            "invalid JSON in SHA response for {owner_repo}@{ref_}: {e}"
+        ))
+    })?;
+    Ok(data["sha"].as_str().map(|s| s.to_string()))
 }
 
 /// Resolve a branch/tag/SHA ref to a full commit SHA via GitHub API.
 ///
 /// When ref is `main` and the repo uses `master`, falls back automatically.
 pub fn resolve_github_sha(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
     owner_repo: &str,
     ref_: &str,
 ) -> Result<String, SkillfileError> {
-    if let Some(sha) = try_resolve_sha(agent, owner_repo, ref_)? {
+    if let Some(sha) = try_resolve_sha(client, owner_repo, ref_)? {
         return Ok(sha);
     }
     // Fall back: main <-> master
@@ -113,7 +80,7 @@ pub fn resolve_github_sha(
         _ => None,
     };
     if let Some(fb) = fallback {
-        if let Some(sha) = try_resolve_sha(agent, owner_repo, fb)? {
+        if let Some(sha) = try_resolve_sha(client, owner_repo, fb)? {
             return Ok(sha);
         }
     }
@@ -124,7 +91,7 @@ pub fn resolve_github_sha(
 
 /// Fetch raw file bytes from `raw.githubusercontent.com`.
 pub fn fetch_github_file(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
     owner_repo: &str,
     path_in_repo: &str,
     sha: &str,
@@ -135,7 +102,7 @@ pub fn fetch_github_file(
         path_in_repo
     };
     let url = format!("https://raw.githubusercontent.com/{owner_repo}/{sha}/{effective_path}");
-    http_get(agent, &url)
+    http_get(client, &url)
 }
 
 /// A file entry from a GitHub directory listing.
@@ -147,29 +114,23 @@ pub struct DirEntry {
 
 /// List all files under `base_path` using the Git Trees API.
 pub fn list_github_dir_recursive(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
     owner_repo: &str,
     base_path: &str,
     ref_: &str,
 ) -> Result<Vec<DirEntry>, SkillfileError> {
     let url = format!("https://api.github.com/repos/{owner_repo}/git/trees/{ref_}?recursive=1");
-    let mut response = build_get(agent, &url)
-        .header("Accept", "application/vnd.github.v3+json")
-        .call()
-        .map_err(|e| {
-            SkillfileError::Network(format!(
-                "failed to list directory {owner_repo}/{base_path}: {e}"
-            ))
-        })?;
-    let text = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| SkillfileError::Network(format!("failed to read tree response: {e}")))?;
+    let text = client.get_json(&url)?.ok_or_else(|| {
+        SkillfileError::Network(format!(
+            "failed to list directory {owner_repo}/{base_path}: 4xx error"
+        ))
+    })?;
     let data: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| SkillfileError::Network(format!("invalid tree JSON: {e}")))?;
 
     let prefix = format!("{}/", base_path.trim_end_matches('/'));
-    let tree = data["tree"].as_array().unwrap_or(&Vec::new()).clone();
+    let empty = Vec::new();
+    let tree = data["tree"].as_array().unwrap_or(&empty);
 
     let entries = tree
         .iter()
@@ -224,21 +185,21 @@ impl FileContent {
 
 /// Fetch multiple files in parallel using threads.
 pub fn fetch_files_parallel(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
     files: &[DirEntry],
 ) -> Result<Vec<(String, FileContent)>, SkillfileError> {
     if files.is_empty() {
         return Ok(Vec::new());
     }
     if files.len() == 1 {
-        let bytes = http_get(agent, &files[0].download_url)?;
+        let bytes = http_get(client, &files[0].download_url)?;
         return Ok(vec![(
             files[0].relative_path.clone(),
             FileContent::from_bytes(bytes),
         )]);
     }
 
-    // Parallel fetch using threads
+    // Parallel fetch using scoped threads (client is &dyn HttpClient: Send + Sync)
     let results: Vec<Result<(String, FileContent), SkillfileError>> = std::thread::scope(|s| {
         let handles: Vec<_> = files
             .iter()
@@ -246,12 +207,15 @@ pub fn fetch_files_parallel(
                 let url = entry.download_url.clone();
                 let rel = entry.relative_path.clone();
                 s.spawn(move || {
-                    let bytes = http_get(agent, &url)?;
+                    let bytes = http_get(client, &url)?;
                     Ok((rel, FileContent::from_bytes(bytes)))
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("download thread panicked"))
+            .collect()
     });
 
     results.into_iter().collect()

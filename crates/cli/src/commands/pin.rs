@@ -194,7 +194,7 @@ pub fn cmd_unpin(name: &str, repo_root: &Path) -> Result<(), SkillfileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skillfile_core::models::{InstallTarget, SourceFields};
+    use skillfile_core::models::{InstallTarget, Scope, SourceFields};
 
     fn write_manifest(dir: &Path, content: &str) {
         std::fs::write(dir.join(MANIFEST_NAME), content).unwrap();
@@ -434,7 +434,7 @@ mod tests {
     fn _make_install_target() -> InstallTarget {
         InstallTarget {
             adapter: "claude-code".into(),
-            scope: "local".into(),
+            scope: Scope::Local,
         }
     }
 }

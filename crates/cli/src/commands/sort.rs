@@ -30,13 +30,14 @@ pub fn format_line(entry: &Entry) -> String {
 
 fn sort_key(entry: &Entry) -> (String, String, String) {
     let source_type = entry.source_type().to_string();
-    let repo = entry.owner_repo().to_string();
-    let path = match &entry.source {
-        skillfile_core::models::SourceFields::Github { path_in_repo, .. } => {
-            path_in_repo.to_string()
-        }
-        skillfile_core::models::SourceFields::Local { path } => path.to_string(),
-        skillfile_core::models::SourceFields::Url { url } => url.to_string(),
+    let (repo, path) = match &entry.source {
+        skillfile_core::models::SourceFields::Github {
+            owner_repo,
+            path_in_repo,
+            ..
+        } => (owner_repo.clone(), path_in_repo.clone()),
+        skillfile_core::models::SourceFields::Local { path } => (String::new(), path.clone()),
+        skillfile_core::models::SourceFields::Url { url } => (String::new(), url.clone()),
     };
     (source_type, repo, path)
 }
@@ -48,10 +49,11 @@ fn group_by_repo<'a>(entries: &'a [&'a Entry]) -> Vec<Vec<&'a Entry>> {
     let mut current_group: Vec<&Entry> = Vec::new();
 
     for entry in entries {
-        let key = (
-            entry.source_type().to_string(),
-            entry.owner_repo().to_string(),
-        );
+        let repo = match &entry.source {
+            skillfile_core::models::SourceFields::Github { owner_repo, .. } => owner_repo.clone(),
+            _ => String::new(),
+        };
+        let key = (entry.source_type().to_string(), repo);
         if current_key.as_ref() != Some(&key) {
             if !current_group.is_empty() {
                 groups.push(current_group);

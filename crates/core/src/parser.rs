@@ -2,11 +2,10 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::SkillfileError;
-use crate::models::{Entry, InstallTarget, Manifest, SourceFields, DEFAULT_REF};
+use crate::models::{Entry, InstallTarget, Manifest, Scope, SourceFields, DEFAULT_REF};
 
 pub const MANIFEST_NAME: &str = "Skillfile";
 const KNOWN_SOURCES: &[&str] = &["github", "local", "url"];
-const VALID_SCOPES: &[&str] = &["global", "local"];
 
 /// Result of parsing a Skillfile: the manifest plus any warnings.
 #[derive(Debug)]
@@ -244,21 +243,22 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ParseResult, SkillfileErro
                         "warning: line {lineno}: install line needs: adapter scope"
                     ));
                 } else {
-                    let scope = &parts[2];
-                    if !VALID_SCOPES.contains(&scope.as_str()) {
-                        warnings.push(format!(
-                            "warning: line {lineno}: invalid scope '{scope}', must be one of: {}",
-                            {
-                                let mut scopes: Vec<&str> = VALID_SCOPES.to_vec();
-                                scopes.sort();
-                                scopes.join(", ")
-                            }
-                        ));
-                    } else {
-                        install_targets.push(InstallTarget {
-                            adapter: parts[1].clone(),
-                            scope: scope.clone(),
-                        });
+                    let scope_str = &parts[2];
+                    match Scope::parse(scope_str) {
+                        Some(scope) => {
+                            install_targets.push(InstallTarget {
+                                adapter: parts[1].clone(),
+                                scope,
+                            });
+                        }
+                        None => {
+                            let valid: Vec<&str> = Scope::ALL.iter().map(|s| s.as_str()).collect();
+                            warnings.push(format!(
+                                "warning: line {lineno}: invalid scope '{scope_str}', \
+                                 must be one of: {}",
+                                valid.join(", ")
+                            ));
+                        }
                     }
                 }
             }
@@ -506,13 +506,9 @@ mod tests {
         let p = write_manifest(dir.path(), "install  claude-code  global");
         let r = parse_manifest(&p).unwrap();
         assert_eq!(r.manifest.install_targets.len(), 1);
-        assert_eq!(
-            r.manifest.install_targets[0],
-            InstallTarget {
-                adapter: "claude-code".into(),
-                scope: "global".into(),
-            }
-        );
+        let t = &r.manifest.install_targets[0];
+        assert_eq!(t.adapter, "claude-code");
+        assert_eq!(t.scope, Scope::Global);
     }
 
     #[test]
@@ -524,8 +520,8 @@ mod tests {
         );
         let r = parse_manifest(&p).unwrap();
         assert_eq!(r.manifest.install_targets.len(), 2);
-        assert_eq!(r.manifest.install_targets[0].scope, "global");
-        assert_eq!(r.manifest.install_targets[1].scope, "local");
+        assert_eq!(r.manifest.install_targets[0].scope, Scope::Global);
+        assert_eq!(r.manifest.install_targets[1].scope, Scope::Local);
     }
 
     #[test]
@@ -598,7 +594,7 @@ mod tests {
         let p = write_manifest(dir.path(), "install  claude-code  global  # primary target");
         let r = parse_manifest(&p).unwrap();
         assert_eq!(r.manifest.install_targets.len(), 1);
-        assert_eq!(r.manifest.install_targets[0].scope, "global");
+        assert_eq!(r.manifest.install_targets[0].scope, Scope::Global);
     }
 
     #[test]
@@ -715,12 +711,12 @@ mod tests {
 
     #[test]
     fn valid_scope_accepted() {
-        for scope in &["global", "local"] {
+        for (scope_str, expected) in &[("global", Scope::Global), ("local", Scope::Local)] {
             let dir = tempfile::tempdir().unwrap();
-            let p = write_manifest(dir.path(), &format!("install  claude-code  {scope}"));
+            let p = write_manifest(dir.path(), &format!("install  claude-code  {scope_str}"));
             let r = parse_manifest(&p).unwrap();
             assert_eq!(r.manifest.install_targets.len(), 1);
-            assert_eq!(r.manifest.install_targets[0].scope, *scope);
+            assert_eq!(r.manifest.install_targets[0].scope, *expected);
         }
     }
 
@@ -772,7 +768,7 @@ mod tests {
             r.manifest.install_targets[0],
             InstallTarget {
                 adapter: "claude-code".into(),
-                scope: "global".into(),
+                scope: Scope::Global,
             }
         );
     }

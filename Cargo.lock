@@ -902,7 +902,6 @@ dependencies = [
  "skillfile-deploy",
  "skillfile-sources",
  "tempfile",
- "ureq",
 ]
 
 [[package]]

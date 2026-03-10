@@ -1,19 +1,82 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use skillfile_core::models::{Entry, InstallOptions};
+use skillfile_core::models::{Entry, InstallOptions, Scope};
+use skillfile_core::patch::walkdir;
 use skillfile_sources::strategy::is_dir_entry;
 
-/// How a directory entry is deployed.
+// ---------------------------------------------------------------------------
+// PlatformAdapter trait — the core abstraction for tool-specific deployment
+// ---------------------------------------------------------------------------
+
+/// How a directory entry is deployed to a platform's target directory.
 ///
-/// - `Flat`: each .md placed individually in target_dir/ (e.g. claude-code agents)
-/// - `Nested`: directory placed as target_dir/<name>/ (e.g. all skill adapters)
+/// - `Flat`: each `.md` placed individually in `target_dir/` (e.g. claude-code agents)
+/// - `Nested`: directory placed as `target_dir/<name>/` (e.g. all skill adapters)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirInstallMode {
     Flat,
     Nested,
 }
+
+/// The deployment result: a map of `{patch_key: installed_path}`.
+///
+/// Keys match the relative paths used in `.skillfile/patches/` so patch lookups
+/// work correctly:
+/// - Single-file entries: key is `"{name}.md"`
+/// - Directory entries: keys are paths relative to the source directory
+pub type DeployResult = HashMap<String, PathBuf>;
+
+/// Contract for deploying skill/agent files to a specific AI tool's directory.
+///
+/// Each AI tool (Claude Code, Gemini CLI, Codex, etc.) has its own convention
+/// for where skills and agents live on disk. A `PlatformAdapter` encapsulates
+/// that knowledge.
+///
+/// The trait is object-safe so adapters can be stored in a heterogeneous registry.
+pub trait PlatformAdapter: Send + Sync + fmt::Debug {
+    /// The adapter identifier (e.g. `"claude-code"`, `"gemini-cli"`).
+    fn name(&self) -> &str;
+
+    /// Whether this platform supports the given entity type (e.g. `"skill"`, `"agent"`).
+    fn supports(&self, entity_type: &str) -> bool;
+
+    /// Resolve the absolute target directory for an entity type + scope.
+    fn target_dir(&self, entity_type: &str, scope: Scope, repo_root: &Path) -> PathBuf;
+
+    /// The install mode for directory entries of this entity type.
+    fn dir_mode(&self, entity_type: &str) -> Option<DirInstallMode>;
+
+    /// Deploy a single entry from `source` to its platform-specific location.
+    ///
+    /// Returns `{patch_key: installed_path}` for every file that was placed.
+    /// Returns an empty map for dry-run or when deployment is skipped.
+    fn deploy_entry(
+        &self,
+        entry: &Entry,
+        source: &Path,
+        scope: Scope,
+        repo_root: &Path,
+        opts: &InstallOptions,
+    ) -> DeployResult;
+
+    /// The installed path for a single-file entry.
+    fn installed_path(&self, entry: &Entry, scope: Scope, repo_root: &Path) -> PathBuf;
+
+    /// Map of `{relative_path: absolute_path}` for all installed files of a directory entry.
+    fn installed_dir_files(
+        &self,
+        entry: &Entry,
+        scope: Scope,
+        repo_root: &Path,
+    ) -> HashMap<String, PathBuf>;
+}
+
+// ---------------------------------------------------------------------------
+// EntityConfig — per-entity-type path configuration
+// ---------------------------------------------------------------------------
 
 /// Paths and install mode for one entity type within a platform.
 #[derive(Debug, Clone)]
@@ -23,9 +86,16 @@ pub struct EntityConfig {
     pub dir_mode: DirInstallMode,
 }
 
-/// Filesystem-based platform adapter. Each instance is configured with a name
-/// and a map of entity configs. All three built-in adapters are instances of this
-/// struct — no subclassing needed.
+// ---------------------------------------------------------------------------
+// FileSystemAdapter — the concrete implementation of PlatformAdapter
+// ---------------------------------------------------------------------------
+
+/// Filesystem-based platform adapter.
+///
+/// Each instance is configured with a name and a map of `EntityConfig`s.
+/// All three built-in adapters (claude-code, gemini-cli, codex) are instances
+/// of this struct with different configurations — the `PlatformAdapter` trait
+/// allows alternative implementations if needed.
 #[derive(Debug, Clone)]
 pub struct FileSystemAdapter {
     name: String,
@@ -39,22 +109,22 @@ impl FileSystemAdapter {
             entities,
         }
     }
+}
 
-    pub fn name(&self) -> &str {
+impl PlatformAdapter for FileSystemAdapter {
+    fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn supports(&self, entity_type: &str) -> bool {
+    fn supports(&self, entity_type: &str) -> bool {
         self.entities.contains_key(entity_type)
     }
 
-    /// Resolve the absolute deploy directory for (entity_type, scope, repo_root).
-    pub fn target_dir(&self, entity_type: &str, scope: &str, repo_root: &Path) -> PathBuf {
+    fn target_dir(&self, entity_type: &str, scope: Scope, repo_root: &Path) -> PathBuf {
         let config = &self.entities[entity_type];
-        let raw = if scope == "global" {
-            &config.global_path
-        } else {
-            &config.local_path
+        let raw = match scope {
+            Scope::Global => &config.global_path,
+            Scope::Local => &config.local_path,
         };
         if raw.starts_with('~') {
             let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -64,24 +134,18 @@ impl FileSystemAdapter {
         }
     }
 
-    /// Get the dir_mode for an entity type.
-    pub fn dir_mode(&self, entity_type: &str) -> Option<DirInstallMode> {
+    fn dir_mode(&self, entity_type: &str) -> Option<DirInstallMode> {
         self.entities.get(entity_type).map(|c| c.dir_mode)
     }
 
-    /// Deploy a single entry. Returns {relative_key: installed_path}.
-    ///
-    /// Keys match the relative paths used in .skillfile/patches/ so patch lookups
-    /// work. For single-file entries, key is "{name}.md". For directory entries,
-    /// keys are paths relative to the source directory.
-    pub fn deploy_entry(
+    fn deploy_entry(
         &self,
         entry: &Entry,
         source: &Path,
-        scope: &str,
+        scope: Scope,
         repo_root: &Path,
         opts: &InstallOptions,
-    ) -> HashMap<String, PathBuf> {
+    ) -> DeployResult {
         let target_dir = self.target_dir(&entry.entity_type, scope, repo_root);
         let is_dir = is_dir_entry(entry);
 
@@ -91,7 +155,7 @@ impl FileSystemAdapter {
                 .get(&entry.entity_type)
                 .is_some_and(|c| c.dir_mode == DirInstallMode::Flat)
         {
-            return self.deploy_flat(source, &target_dir, opts);
+            return deploy_flat(source, &target_dir, opts);
         }
 
         let dest = if is_dir {
@@ -106,35 +170,29 @@ impl FileSystemAdapter {
 
         if is_dir {
             let mut result = HashMap::new();
-            if let Ok(walker) = walkdir(source) {
-                for file in walker {
-                    if file.file_name().map_or(true, |n| n == ".meta") {
-                        continue;
-                    }
-                    if let Ok(rel) = file.strip_prefix(source) {
-                        result.insert(rel.to_string_lossy().to_string(), dest.join(rel));
-                    }
+            for file in walkdir(source) {
+                if file.file_name().map_or(true, |n| n == ".meta") {
+                    continue;
+                }
+                if let Ok(rel) = file.strip_prefix(source) {
+                    result.insert(rel.to_string_lossy().to_string(), dest.join(rel));
                 }
             }
             result
         } else {
-            let mut result = HashMap::new();
-            result.insert(format!("{}.md", entry.name), dest);
-            result
+            HashMap::from([(format!("{}.md", entry.name), dest)])
         }
     }
 
-    /// Get the installed path for a single-file entry.
-    pub fn installed_path(&self, entry: &Entry, scope: &str, repo_root: &Path) -> PathBuf {
+    fn installed_path(&self, entry: &Entry, scope: Scope, repo_root: &Path) -> PathBuf {
         self.target_dir(&entry.entity_type, scope, repo_root)
             .join(format!("{}.md", entry.name))
     }
 
-    /// Get installed files for a directory entry. Returns {relative_path: absolute_path}.
-    pub fn installed_dir_files(
+    fn installed_dir_files(
         &self,
         entry: &Entry,
-        scope: &str,
+        scope: Scope,
         repo_root: &Path,
     ) -> HashMap<String, PathBuf> {
         let target_dir = self.target_dir(&entry.entity_type, scope, repo_root);
@@ -150,11 +208,9 @@ impl FileSystemAdapter {
                 return HashMap::new();
             }
             let mut result = HashMap::new();
-            if let Ok(walker) = walkdir(&installed_dir) {
-                for file in walker {
-                    if let Ok(rel) = file.strip_prefix(&installed_dir) {
-                        result.insert(rel.to_string_lossy().to_string(), file);
-                    }
+            for file in walkdir(&installed_dir) {
+                if let Ok(rel) = file.strip_prefix(&installed_dir) {
+                    result.insert(rel.to_string_lossy().to_string(), file);
                 }
             }
             result
@@ -165,84 +221,74 @@ impl FileSystemAdapter {
                 return HashMap::new();
             }
             let mut result = HashMap::new();
-            if let Ok(walker) = walkdir(&vdir) {
-                for file in walker {
-                    if file
-                        .extension()
-                        .map_or(true, |ext| ext.to_string_lossy() != "md")
-                    {
-                        continue;
-                    }
-                    if let Ok(rel) = file.strip_prefix(&vdir) {
-                        let dest = target_dir.join(file.file_name().unwrap_or_default());
-                        if dest.exists() {
-                            result.insert(rel.to_string_lossy().to_string(), dest);
-                        }
+            for file in walkdir(&vdir) {
+                if file
+                    .extension()
+                    .map_or(true, |ext| ext.to_string_lossy() != "md")
+                {
+                    continue;
+                }
+                if let Ok(rel) = file.strip_prefix(&vdir) {
+                    let dest = target_dir.join(file.file_name().unwrap_or_default());
+                    if dest.exists() {
+                        result.insert(rel.to_string_lossy().to_string(), dest);
                     }
                 }
             }
             result
         }
     }
-
-    /// Deploy each .md in source_dir as an individual file in target_dir (flat mode).
-    fn deploy_flat(
-        &self,
-        source_dir: &Path,
-        target_dir: &Path,
-        opts: &InstallOptions,
-    ) -> HashMap<String, PathBuf> {
-        let mut md_files: Vec<PathBuf> = Vec::new();
-        if let Ok(walker) = walkdir(source_dir) {
-            for file in walker {
-                if file
-                    .extension()
-                    .is_some_and(|ext| ext.to_string_lossy() == "md")
-                {
-                    md_files.push(file);
-                }
-            }
-        }
-        md_files.sort();
-
-        if opts.dry_run {
-            for src in &md_files {
-                if let Some(name) = src.file_name() {
-                    eprintln!(
-                        "  {} -> {} [copy, dry-run]",
-                        name.to_string_lossy(),
-                        target_dir.join(name).display()
-                    );
-                }
-            }
-            return HashMap::new();
-        }
-
-        std::fs::create_dir_all(target_dir).ok();
-        let mut result = HashMap::new();
-        for src in &md_files {
-            let Some(name) = src.file_name() else {
-                continue;
-            };
-            let dest = target_dir.join(name);
-            if !opts.overwrite && dest.is_file() {
-                continue;
-            }
-            if dest.exists() {
-                std::fs::remove_file(&dest).ok();
-            }
-            if std::fs::copy(src, &dest).is_ok() {
-                eprintln!("  {} -> {}", name.to_string_lossy(), dest.display());
-                if let Ok(rel) = src.strip_prefix(source_dir) {
-                    result.insert(rel.to_string_lossy().to_string(), dest);
-                }
-            }
-        }
-        result
-    }
 }
 
-/// Copy source to dest. Returns true if placed, false if skipped.
+// ---------------------------------------------------------------------------
+// Deployment helpers (used by FileSystemAdapter)
+// ---------------------------------------------------------------------------
+
+/// Deploy each `.md` in `source_dir` as an individual file in `target_dir` (flat mode).
+fn deploy_flat(source_dir: &Path, target_dir: &Path, opts: &InstallOptions) -> DeployResult {
+    let mut md_files: Vec<PathBuf> = walkdir(source_dir)
+        .into_iter()
+        .filter(|f| f.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    md_files.sort();
+
+    if opts.dry_run {
+        for src in &md_files {
+            if let Some(name) = src.file_name() {
+                eprintln!(
+                    "  {} -> {} [copy, dry-run]",
+                    name.to_string_lossy(),
+                    target_dir.join(name).display()
+                );
+            }
+        }
+        return HashMap::new();
+    }
+
+    std::fs::create_dir_all(target_dir).ok();
+    let mut result = HashMap::new();
+    for src in &md_files {
+        let Some(name) = src.file_name() else {
+            continue;
+        };
+        let dest = target_dir.join(name);
+        if !opts.overwrite && dest.is_file() {
+            continue;
+        }
+        if dest.exists() {
+            std::fs::remove_file(&dest).ok();
+        }
+        if std::fs::copy(src, &dest).is_ok() {
+            eprintln!("  {} -> {}", name.to_string_lossy(), dest.display());
+            if let Ok(rel) = src.strip_prefix(source_dir) {
+                result.insert(rel.to_string_lossy().to_string(), dest);
+            }
+        }
+    }
+    result
+}
+
+/// Copy `source` to `dest`. Returns `true` if placed, `false` if skipped.
 fn place_file(source: &Path, dest: &Path, is_dir: bool, opts: &InstallOptions) -> bool {
     if !opts.overwrite && !opts.dry_run {
         if is_dir && dest.is_dir() {
@@ -303,127 +349,162 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Walk a directory recursively and return all file paths (non-directory entries).
-fn walkdir(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    walkdir_inner(dir, &mut files)?;
-    Ok(files)
+// ---------------------------------------------------------------------------
+// AdapterRegistry — injectable, testable collection of platform adapters
+// ---------------------------------------------------------------------------
+
+/// A collection of platform adapters, indexed by name.
+///
+/// The registry owns the adapters and provides lookup by name. It can be
+/// constructed with the built-in adapters via [`AdapterRegistry::builtin()`],
+/// or built manually for testing.
+pub struct AdapterRegistry {
+    adapters: HashMap<String, Box<dyn PlatformAdapter>>,
 }
 
-fn walkdir_inner(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walkdir_inner(&path, files)?;
-        } else {
-            files.push(path);
-        }
+impl AdapterRegistry {
+    /// Create a registry from a vec of boxed adapters.
+    pub fn new(adapters: Vec<Box<dyn PlatformAdapter>>) -> Self {
+        let map = adapters
+            .into_iter()
+            .map(|a| (a.name().to_string(), a))
+            .collect();
+        Self { adapters: map }
     }
-    Ok(())
+
+    /// Create the built-in registry with all known platform adapters.
+    pub fn builtin() -> Self {
+        Self::new(vec![
+            Box::new(claude_code_adapter()),
+            Box::new(gemini_cli_adapter()),
+            Box::new(codex_adapter()),
+        ])
+    }
+
+    /// Look up an adapter by name.
+    pub fn get(&self, name: &str) -> Option<&dyn PlatformAdapter> {
+        self.adapters.get(name).map(|b| &**b)
+    }
+
+    /// Check if an adapter with this name exists.
+    pub fn contains(&self, name: &str) -> bool {
+        self.adapters.contains_key(name)
+    }
+
+    /// Sorted list of all adapter names.
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.adapters.keys().map(|s| s.as_str()).collect();
+        names.sort();
+        names
+    }
+}
+
+impl fmt::Debug for AdapterRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AdapterRegistry")
+            .field("adapters", &self.names())
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Registry — one instance per tool
+// Built-in adapters
 // ---------------------------------------------------------------------------
 
 fn claude_code_adapter() -> FileSystemAdapter {
-    let mut entities = HashMap::new();
-    entities.insert(
-        "agent".into(),
-        EntityConfig {
-            global_path: "~/.claude/agents".into(),
-            local_path: ".claude/agents".into(),
-            dir_mode: DirInstallMode::Flat,
-        },
-    );
-    entities.insert(
-        "skill".into(),
-        EntityConfig {
-            global_path: "~/.claude/skills".into(),
-            local_path: ".claude/skills".into(),
-            dir_mode: DirInstallMode::Nested,
-        },
-    );
-    FileSystemAdapter::new("claude-code", entities)
+    FileSystemAdapter::new(
+        "claude-code",
+        HashMap::from([
+            (
+                "agent".to_string(),
+                EntityConfig {
+                    global_path: "~/.claude/agents".into(),
+                    local_path: ".claude/agents".into(),
+                    dir_mode: DirInstallMode::Flat,
+                },
+            ),
+            (
+                "skill".to_string(),
+                EntityConfig {
+                    global_path: "~/.claude/skills".into(),
+                    local_path: ".claude/skills".into(),
+                    dir_mode: DirInstallMode::Nested,
+                },
+            ),
+        ]),
+    )
 }
 
 fn gemini_cli_adapter() -> FileSystemAdapter {
-    let mut entities = HashMap::new();
-    entities.insert(
-        "agent".into(),
-        EntityConfig {
-            global_path: "~/.gemini/agents".into(),
-            local_path: ".gemini/agents".into(),
-            dir_mode: DirInstallMode::Flat,
-        },
-    );
-    entities.insert(
-        "skill".into(),
-        EntityConfig {
-            global_path: "~/.gemini/skills".into(),
-            local_path: ".gemini/skills".into(),
-            dir_mode: DirInstallMode::Nested,
-        },
-    );
-    FileSystemAdapter::new("gemini-cli", entities)
+    FileSystemAdapter::new(
+        "gemini-cli",
+        HashMap::from([
+            (
+                "agent".to_string(),
+                EntityConfig {
+                    global_path: "~/.gemini/agents".into(),
+                    local_path: ".gemini/agents".into(),
+                    dir_mode: DirInstallMode::Flat,
+                },
+            ),
+            (
+                "skill".to_string(),
+                EntityConfig {
+                    global_path: "~/.gemini/skills".into(),
+                    local_path: ".gemini/skills".into(),
+                    dir_mode: DirInstallMode::Nested,
+                },
+            ),
+        ]),
+    )
 }
 
 fn codex_adapter() -> FileSystemAdapter {
-    let mut entities = HashMap::new();
-    entities.insert(
-        "skill".into(),
-        EntityConfig {
-            global_path: "~/.codex/skills".into(),
-            local_path: ".codex/skills".into(),
-            dir_mode: DirInstallMode::Nested,
-        },
-    );
-    FileSystemAdapter::new("codex", entities)
+    FileSystemAdapter::new(
+        "codex",
+        HashMap::from([(
+            "skill".to_string(),
+            EntityConfig {
+                global_path: "~/.codex/skills".into(),
+                local_path: ".codex/skills".into(),
+                dir_mode: DirInstallMode::Nested,
+            },
+        )]),
+    )
 }
+
+// ---------------------------------------------------------------------------
+// Global registry accessor (backward-compatible convenience)
+// ---------------------------------------------------------------------------
 
 /// Get the global adapter registry (lazily initialized).
-pub fn adapters() -> &'static HashMap<String, FileSystemAdapter> {
-    static ADAPTERS: OnceLock<HashMap<String, FileSystemAdapter>> = OnceLock::new();
-    ADAPTERS.get_or_init(|| {
-        let mut m = HashMap::new();
-        m.insert("claude-code".into(), claude_code_adapter());
-        m.insert("gemini-cli".into(), gemini_cli_adapter());
-        m.insert("codex".into(), codex_adapter());
-        m
-    })
+pub fn adapters() -> &'static AdapterRegistry {
+    static REGISTRY: OnceLock<AdapterRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(AdapterRegistry::builtin)
 }
 
-/// List of known adapter names.
+/// Sorted list of known adapter names.
 pub fn known_adapters() -> Vec<&'static str> {
-    let a = adapters();
-    let mut names: Vec<&str> = a.keys().map(|s| s.as_str()).collect();
-    names.sort();
-    names
+    adapters().names()
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // -- Protocol compliance: every registered adapter is a FileSystemAdapter --
+    // -- Trait compliance: every registered adapter satisfies PlatformAdapter --
 
     #[test]
-    fn claude_code_adapter_in_registry() {
-        assert!(adapters().contains_key("claude-code"));
+    fn all_builtin_adapters_in_registry() {
+        let reg = adapters();
+        assert!(reg.contains("claude-code"));
+        assert!(reg.contains("gemini-cli"));
+        assert!(reg.contains("codex"));
     }
-
-    #[test]
-    fn gemini_cli_adapter_in_registry() {
-        assert!(adapters().contains_key("gemini-cli"));
-    }
-
-    #[test]
-    fn codex_adapter_in_registry() {
-        assert!(adapters().contains_key("codex"));
-    }
-
-    // -- Registry completeness --
 
     #[test]
     fn known_adapters_contains_all() {
@@ -436,124 +517,102 @@ mod tests {
 
     #[test]
     fn adapter_name_matches_registry_key() {
-        for (key, adapter) in adapters() {
-            assert_eq!(adapter.name(), key);
+        let reg = adapters();
+        for name in reg.names() {
+            let adapter = reg.get(name).unwrap();
+            assert_eq!(adapter.name(), name);
         }
+    }
+
+    #[test]
+    fn registry_get_unknown_returns_none() {
+        assert!(adapters().get("unknown-tool").is_none());
     }
 
     // -- supports() --
 
     #[test]
-    fn claude_code_supports_agent() {
-        assert!(adapters()["claude-code"].supports("agent"));
+    fn claude_code_supports_agent_and_skill() {
+        let a = adapters().get("claude-code").unwrap();
+        assert!(a.supports("agent"));
+        assert!(a.supports("skill"));
+        assert!(!a.supports("hook"));
     }
 
     #[test]
-    fn claude_code_supports_skill() {
-        assert!(adapters()["claude-code"].supports("skill"));
+    fn gemini_cli_supports_agent_and_skill() {
+        let a = adapters().get("gemini-cli").unwrap();
+        assert!(a.supports("agent"));
+        assert!(a.supports("skill"));
     }
 
     #[test]
-    fn gemini_cli_supports_agent() {
-        assert!(adapters()["gemini-cli"].supports("agent"));
+    fn codex_supports_skill_not_agent() {
+        let a = adapters().get("codex").unwrap();
+        assert!(a.supports("skill"));
+        assert!(!a.supports("agent"));
     }
 
-    #[test]
-    fn gemini_cli_supports_skill() {
-        assert!(adapters()["gemini-cli"].supports("skill"));
-    }
+    // -- target_dir() --
 
     #[test]
-    fn codex_supports_skill() {
-        assert!(adapters()["codex"].supports("skill"));
-    }
-
-    #[test]
-    fn codex_does_not_support_agents() {
-        assert!(!adapters()["codex"].supports("agent"));
-    }
-
-    #[test]
-    fn adapters_do_not_support_unknown_entity() {
-        assert!(!adapters()["claude-code"].supports("hook"));
-        assert!(!adapters()["gemini-cli"].supports("hook"));
-        assert!(!adapters()["codex"].supports("hook"));
-    }
-
-    // -- target_dir() local scope --
-
-    #[test]
-    fn local_target_dir_claude_code_agent() {
+    fn local_target_dir_claude_code() {
         let tmp = PathBuf::from("/tmp/test");
-        let a = &adapters()["claude-code"];
+        let a = adapters().get("claude-code").unwrap();
         assert_eq!(
-            a.target_dir("agent", "local", &tmp),
+            a.target_dir("agent", Scope::Local, &tmp),
             tmp.join(".claude/agents")
         );
-    }
-
-    #[test]
-    fn local_target_dir_claude_code_skill() {
-        let tmp = PathBuf::from("/tmp/test");
-        let a = &adapters()["claude-code"];
         assert_eq!(
-            a.target_dir("skill", "local", &tmp),
+            a.target_dir("skill", Scope::Local, &tmp),
             tmp.join(".claude/skills")
         );
     }
 
     #[test]
-    fn local_target_dir_gemini_cli_agent() {
+    fn local_target_dir_gemini_cli() {
         let tmp = PathBuf::from("/tmp/test");
-        let a = &adapters()["gemini-cli"];
+        let a = adapters().get("gemini-cli").unwrap();
         assert_eq!(
-            a.target_dir("agent", "local", &tmp),
+            a.target_dir("agent", Scope::Local, &tmp),
             tmp.join(".gemini/agents")
         );
-    }
-
-    #[test]
-    fn local_target_dir_gemini_cli_skill() {
-        let tmp = PathBuf::from("/tmp/test");
-        let a = &adapters()["gemini-cli"];
         assert_eq!(
-            a.target_dir("skill", "local", &tmp),
+            a.target_dir("skill", Scope::Local, &tmp),
             tmp.join(".gemini/skills")
         );
     }
 
     #[test]
-    fn local_target_dir_codex_skill() {
+    fn local_target_dir_codex() {
         let tmp = PathBuf::from("/tmp/test");
-        let a = &adapters()["codex"];
+        let a = adapters().get("codex").unwrap();
         assert_eq!(
-            a.target_dir("skill", "local", &tmp),
+            a.target_dir("skill", Scope::Local, &tmp),
             tmp.join(".codex/skills")
         );
     }
 
-    // -- target_dir() global scope --
-
     #[test]
     fn global_target_dir_is_absolute() {
-        let a = &adapters()["claude-code"];
-        let result = a.target_dir("agent", "global", Path::new("/tmp"));
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.target_dir("agent", Scope::Global, Path::new("/tmp"));
         assert!(result.is_absolute());
         assert!(result.to_string_lossy().ends_with(".claude/agents"));
     }
 
     #[test]
     fn global_target_dir_gemini_cli_skill() {
-        let a = &adapters()["gemini-cli"];
-        let result = a.target_dir("skill", "global", Path::new("/tmp"));
+        let a = adapters().get("gemini-cli").unwrap();
+        let result = a.target_dir("skill", Scope::Global, Path::new("/tmp"));
         assert!(result.is_absolute());
         assert!(result.to_string_lossy().ends_with(".gemini/skills"));
     }
 
     #[test]
     fn global_target_dir_codex_skill() {
-        let a = &adapters()["codex"];
-        let result = a.target_dir("skill", "global", Path::new("/tmp"));
+        let a = adapters().get("codex").unwrap();
+        let result = a.target_dir("skill", Scope::Global, Path::new("/tmp"));
         assert!(result.is_absolute());
         assert!(result.to_string_lossy().ends_with(".codex/skills"));
     }
@@ -561,61 +620,45 @@ mod tests {
     // -- dir_mode --
 
     #[test]
-    fn claude_code_agent_flat() {
-        assert_eq!(
-            adapters()["claude-code"].dir_mode("agent"),
-            Some(DirInstallMode::Flat)
-        );
+    fn claude_code_dir_modes() {
+        let a = adapters().get("claude-code").unwrap();
+        assert_eq!(a.dir_mode("agent"), Some(DirInstallMode::Flat));
+        assert_eq!(a.dir_mode("skill"), Some(DirInstallMode::Nested));
     }
 
     #[test]
-    fn claude_code_skill_nested() {
-        assert_eq!(
-            adapters()["claude-code"].dir_mode("skill"),
-            Some(DirInstallMode::Nested)
-        );
+    fn gemini_cli_dir_modes() {
+        let a = adapters().get("gemini-cli").unwrap();
+        assert_eq!(a.dir_mode("agent"), Some(DirInstallMode::Flat));
+        assert_eq!(a.dir_mode("skill"), Some(DirInstallMode::Nested));
     }
 
     #[test]
-    fn gemini_cli_agent_flat() {
-        assert_eq!(
-            adapters()["gemini-cli"].dir_mode("agent"),
-            Some(DirInstallMode::Flat)
-        );
-    }
-
-    #[test]
-    fn gemini_cli_skill_nested() {
-        assert_eq!(
-            adapters()["gemini-cli"].dir_mode("skill"),
-            Some(DirInstallMode::Nested)
-        );
-    }
-
-    #[test]
-    fn codex_skill_nested() {
-        assert_eq!(
-            adapters()["codex"].dir_mode("skill"),
-            Some(DirInstallMode::Nested)
-        );
+    fn codex_dir_mode() {
+        let a = adapters().get("codex").unwrap();
+        assert_eq!(a.dir_mode("skill"), Some(DirInstallMode::Nested));
     }
 
     // -- Custom adapter extensibility --
 
     #[test]
-    fn custom_filesystem_adapter() {
-        let mut entities = HashMap::new();
-        entities.insert(
-            "skill".into(),
-            EntityConfig {
-                global_path: "~/.my-tool/skills".into(),
-                local_path: ".my-tool/skills".into(),
-                dir_mode: DirInstallMode::Nested,
-            },
+    fn custom_adapter_via_registry() {
+        let custom = FileSystemAdapter::new(
+            "my-tool",
+            HashMap::from([(
+                "skill".to_string(),
+                EntityConfig {
+                    global_path: "~/.my-tool/skills".into(),
+                    local_path: ".my-tool/skills".into(),
+                    dir_mode: DirInstallMode::Nested,
+                },
+            )]),
         );
-        let adapter = FileSystemAdapter::new("my-tool", entities);
-        assert!(adapter.supports("skill"));
-        assert!(!adapter.supports("agent"));
+        let registry = AdapterRegistry::new(vec![Box::new(custom)]);
+        let a = registry.get("my-tool").unwrap();
+        assert!(a.supports("skill"));
+        assert!(!a.supports("agent"));
+        assert_eq!(registry.names(), vec!["my-tool"]);
     }
 
     // -- deploy_entry key contract --
@@ -639,10 +682,11 @@ mod tests {
                 ref_: "main".into(),
             },
         };
-        let result = adapters()["claude-code"].deploy_entry(
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
             &entry,
             &source,
-            "local",
+            Scope::Local,
             dir.path(),
             &InstallOptions::default(),
         );
@@ -672,10 +716,11 @@ mod tests {
                 ref_: "main".into(),
             },
         };
-        let result = adapters()["claude-code"].deploy_entry(
+        let a = adapters().get("claude-code").unwrap();
+        let result = a.deploy_entry(
             &entry,
             &source_dir,
-            "local",
+            Scope::Local,
             dir.path(),
             &InstallOptions::default(),
         );

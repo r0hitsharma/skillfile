@@ -113,19 +113,19 @@ pub fn cmd_add(entry: Entry, repo_root: &Path) -> Result<(), SkillfileError> {
 
     let sync_install_result = (|| -> Result<(), SkillfileError> {
         let mut locked = read_lock(repo_root)?;
-        let agent = ureq::Agent::new_with_defaults();
+        let client = skillfile_sources::http::UreqClient::new();
         let mut ctx = SyncContext {
             repo_root: repo_root.to_path_buf(),
             dry_run: false,
             update: false,
             sha_cache: std::collections::HashMap::new(),
         };
-        sync_entry(&agent, &entry, &mut ctx, &mut locked)?;
+        sync_entry(&client, &entry, &mut ctx, &mut locked)?;
         write_lock(repo_root, &locked)?;
 
         let all_adapters = adapters();
         for target in &result.manifest.install_targets {
-            if all_adapters.contains_key(&target.adapter) {
+            if all_adapters.contains(&target.adapter) {
                 install_entry(&entry, target, repo_root, None)?;
             }
         }

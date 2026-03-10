@@ -3,7 +3,7 @@ use std::path::Path;
 
 use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock};
-use skillfile_core::models::SourceFields;
+use skillfile_core::models::{Scope, SourceFields};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
 use skillfile_deploy::adapter::adapters;
 
@@ -54,15 +54,15 @@ pub fn cmd_validate(repo_root: &Path) -> Result<(), SkillfileError> {
     // Unknown platforms.
     let all_adapters = adapters();
     for target in &manifest.install_targets {
-        if !all_adapters.contains_key(&target.adapter) {
+        if !all_adapters.contains(&target.adapter) {
             errors.push(format!("unknown platform: '{}'", target.adapter));
         }
     }
 
     // Duplicate install targets.
-    let mut seen_targets: HashSet<(String, String)> = HashSet::new();
+    let mut seen_targets: HashSet<(String, Scope)> = HashSet::new();
     for target in &manifest.install_targets {
-        let key = (target.adapter.clone(), target.scope.clone());
+        let key = (target.adapter.clone(), target.scope);
         if seen_targets.contains(&key) {
             errors.push(format!(
                 "duplicate install target: '{} {}'",

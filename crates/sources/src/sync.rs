@@ -6,6 +6,7 @@ use skillfile_core::lock::{lock_key, read_lock, write_lock};
 use skillfile_core::models::{Entry, LockEntry, SourceFields};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
 
+use crate::http::{HttpClient, UreqClient};
 use crate::resolver::{
     fetch_files_parallel, fetch_github_file, http_get, list_github_dir_recursive,
     resolve_github_sha,
@@ -54,7 +55,29 @@ fn content_exists(entry: &Entry, vdir: &Path) -> bool {
 
 /// Sync a single entry. Returns updated lock map.
 pub fn sync_entry(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
+    entry: &Entry,
+    ctx: &mut SyncContext,
+    locked: &mut BTreeMap<String, LockEntry>,
+) -> Result<(), SkillfileError> {
+    match &entry.source {
+        SourceFields::Local { .. } => {
+            let label = format!(
+                "  {}/{}/{}",
+                entry.source_type(),
+                entry.entity_type,
+                entry.name
+            );
+            eprintln!("{label}: local — skipping");
+            Ok(())
+        }
+        SourceFields::Github { .. } => sync_github(client, entry, ctx, locked),
+        SourceFields::Url { url } => sync_url(client, entry, url, ctx, locked),
+    }
+}
+
+fn sync_github(
+    client: &dyn HttpClient,
     entry: &Entry,
     ctx: &mut SyncContext,
     locked: &mut BTreeMap<String, LockEntry>,
@@ -68,26 +91,6 @@ pub fn sync_entry(
     let vdir = vendor_dir_for(entry, &ctx.repo_root);
     let key = lock_key(entry);
 
-    match &entry.source {
-        SourceFields::Local { .. } => {
-            eprintln!("{label}: local — skipping");
-            Ok(())
-        }
-        SourceFields::Github { .. } => sync_github(agent, entry, &vdir, &key, &label, ctx, locked),
-        SourceFields::Url { url } => sync_url(agent, url, &vdir, &key, &label, ctx, locked),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn sync_github(
-    agent: &ureq::Agent,
-    entry: &Entry,
-    vdir: &Path,
-    key: &str,
-    label: &str,
-    ctx: &mut SyncContext,
-    locked: &mut BTreeMap<String, LockEntry>,
-) -> Result<(), SkillfileError> {
     let SourceFields::Github {
         owner_repo,
         path_in_repo,
@@ -99,10 +102,10 @@ fn sync_github(
     let locked_sha = if ctx.update {
         None
     } else {
-        locked.get(key).map(|le| le.sha.clone())
+        locked.get(&key).map(|le| le.sha.clone())
     };
-    let meta = meta_sha(vdir);
-    let has_content = content_exists(entry, vdir);
+    let meta = meta_sha(&vdir);
+    let has_content = content_exists(entry, &vdir);
 
     // Skip if locked SHA matches meta and content exists
     if let Some(ref ls) = locked_sha {
@@ -131,7 +134,7 @@ fn sync_github(
             eprint!(" sha={} (cached)", &sha[..12.min(sha.len())]);
             sha
         } else {
-            let sha = resolve_github_sha(agent, owner_repo, ref_)?;
+            let sha = resolve_github_sha(client, owner_repo, ref_)?;
             eprint!(" sha={}", &sha[..12.min(sha.len())]);
             ctx.sha_cache.insert(cache_key, sha.clone());
             sha
@@ -147,19 +150,19 @@ fn sync_github(
     if ctx.update && meta.as_deref() == Some(sha.as_str()) && has_content {
         eprintln!(" up to date");
         let raw_url = locked
-            .get(key)
+            .get(&key)
             .map(|le| le.raw_url.clone())
             .unwrap_or_default();
-        locked.insert(key.to_string(), LockEntry { sha, raw_url });
+        locked.insert(key, LockEntry { sha, raw_url });
         return Ok(());
     }
 
     // Fetch and write
-    std::fs::create_dir_all(vdir)?;
+    std::fs::create_dir_all(&vdir)?;
 
     let raw_url = if is_dir_entry(entry) {
-        let dir_entries = list_github_dir_recursive(agent, owner_repo, path_in_repo, &sha)?;
-        let fetched = fetch_files_parallel(agent, &dir_entries)?;
+        let dir_entries = list_github_dir_recursive(client, owner_repo, path_in_repo, &sha)?;
+        let fetched = fetch_files_parallel(client, &dir_entries)?;
         for (relative_path, content) in &fetched {
             let dest = vdir.join(relative_path);
             if let Some(parent) = dest.parent() {
@@ -170,7 +173,7 @@ fn sync_github(
         eprintln!(" -> {}/ ({} files)", vdir.display(), fetched.len());
         format!("https://api.github.com/repos/{owner_repo}/contents/{path_in_repo}?ref={sha}")
     } else {
-        let content = fetch_github_file(agent, owner_repo, path_in_repo, &sha)?;
+        let content = fetch_github_file(client, owner_repo, path_in_repo, &sha)?;
         let effective_path = if path_in_repo == "." {
             "SKILL.md"
         } else {
@@ -197,22 +200,29 @@ fn sync_github(
     });
     std::fs::write(
         vdir.join(".meta"),
-        serde_json::to_string_pretty(&meta_data).unwrap() + "\n",
+        serde_json::to_string_pretty(&meta_data).expect("json! values are always serializable")
+            + "\n",
     )?;
 
-    locked.insert(key.to_string(), LockEntry { sha, raw_url });
+    locked.insert(key, LockEntry { sha, raw_url });
     Ok(())
 }
 
 fn sync_url(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
+    entry: &Entry,
     url: &str,
-    vdir: &Path,
-    _key: &str,
-    label: &str,
     ctx: &SyncContext,
     _locked: &mut BTreeMap<String, LockEntry>,
 ) -> Result<(), SkillfileError> {
+    let label = format!(
+        "  {}/{}/{}",
+        entry.source_type(),
+        entry.entity_type,
+        entry.name
+    );
+    let vdir = vendor_dir_for(entry, &ctx.repo_root);
+
     eprint!("{label}: fetching {url} ...");
 
     if ctx.dry_run {
@@ -220,13 +230,13 @@ fn sync_url(
         return Ok(());
     }
 
-    let content = http_get(agent, url)?;
+    let content = http_get(client, url)?;
     let filename = std::path::Path::new(url)
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("content.md");
 
-    std::fs::create_dir_all(vdir)?;
+    std::fs::create_dir_all(&vdir)?;
     std::fs::write(vdir.join(filename), &content)?;
 
     let meta_data = serde_json::json!({
@@ -235,7 +245,8 @@ fn sync_url(
     });
     std::fs::write(
         vdir.join(".meta"),
-        serde_json::to_string_pretty(&meta_data).unwrap() + "\n",
+        serde_json::to_string_pretty(&meta_data).expect("json! values are always serializable")
+            + "\n",
     )?;
 
     eprintln!(" -> {}", vdir.join(filename).display());
@@ -285,7 +296,7 @@ pub fn cmd_sync(
     eprintln!("Syncing {count} {noun}{mode}...");
 
     let mut locked = read_lock(repo_root)?;
-    let agent = ureq::Agent::new_with_defaults();
+    let client = UreqClient::new();
     let mut ctx = SyncContext {
         repo_root: repo_root.to_path_buf(),
         dry_run,
@@ -294,7 +305,7 @@ pub fn cmd_sync(
     };
 
     for entry in &entries {
-        sync_entry(&agent, entry, &mut ctx, &mut locked)?;
+        sync_entry(&client, entry, &mut ctx, &mut locked)?;
     }
 
     if !dry_run {
@@ -308,7 +319,7 @@ pub fn cmd_sync(
 /// Fetch the text content of a single-file github entry at a specific SHA.
 /// Used by `diff` and `resolve` in conflict mode.
 pub fn fetch_file_at_sha(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
     entry: &Entry,
     sha: &str,
 ) -> Result<String, SkillfileError> {
@@ -322,7 +333,7 @@ pub fn fetch_file_at_sha(
             "fetch_file_at_sha only supports github entries".into(),
         ));
     };
-    let bytes = crate::resolver::fetch_github_file(agent, owner_repo, path_in_repo, sha)?;
+    let bytes = crate::resolver::fetch_github_file(client, owner_repo, path_in_repo, sha)?;
     crate::resolver::decode_safe(bytes)
         .map_err(|_| SkillfileError::Network(format!("binary file at sha {sha}")))
 }
@@ -331,7 +342,7 @@ pub fn fetch_file_at_sha(
 /// Returns a map of relative_path -> content.
 /// Used by `diff` and `resolve` in conflict mode.
 pub fn fetch_dir_at_sha(
-    agent: &ureq::Agent,
+    client: &dyn HttpClient,
     entry: &Entry,
     sha: &str,
 ) -> Result<std::collections::HashMap<String, String>, SkillfileError> {
@@ -346,8 +357,8 @@ pub fn fetch_dir_at_sha(
         ));
     };
     let dir_entries =
-        crate::resolver::list_github_dir_recursive(agent, owner_repo, path_in_repo, sha)?;
-    let fetched = crate::resolver::fetch_files_parallel(agent, &dir_entries)?;
+        crate::resolver::list_github_dir_recursive(client, owner_repo, path_in_repo, sha)?;
+    let fetched = crate::resolver::fetch_files_parallel(client, &dir_entries)?;
     let mut result = std::collections::HashMap::new();
     for (path, content) in fetched {
         if let crate::resolver::FileContent::Text(text) = content {

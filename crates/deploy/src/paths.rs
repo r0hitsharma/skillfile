@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use skillfile_core::error::SkillfileError;
-use skillfile_core::models::{Entry, Manifest, SourceFields};
+use skillfile_core::models::{Entry, Manifest, Scope, SourceFields};
 use skillfile_sources::strategy::{content_file, is_dir_entry};
 use skillfile_sources::sync::vendor_dir_for;
 
-use crate::adapter::{adapters, FileSystemAdapter};
+use crate::adapter::{adapters, PlatformAdapter};
 
 /// Resolve absolute deploy directory for (adapter, entity_type, scope).
 pub fn resolve_target_dir(
     adapter_name: &str,
     entity_type: &str,
-    scope: &str,
+    scope: Scope,
     repo_root: &Path,
 ) -> Result<PathBuf, SkillfileError> {
     let a = adapters()
@@ -28,7 +28,7 @@ pub fn installed_path(
     repo_root: &Path,
 ) -> Result<PathBuf, SkillfileError> {
     let adapter = first_target(manifest)?;
-    let scope = &manifest.install_targets[0].scope;
+    let scope = manifest.install_targets[0].scope;
     Ok(adapter.installed_path(entry, scope, repo_root))
 }
 
@@ -39,7 +39,7 @@ pub fn installed_dir_files(
     repo_root: &Path,
 ) -> Result<HashMap<String, PathBuf>, SkillfileError> {
     let adapter = first_target(manifest)?;
-    let scope = &manifest.install_targets[0].scope;
+    let scope = manifest.install_targets[0].scope;
     Ok(adapter.installed_dir_files(entry, scope, repo_root))
 }
 
@@ -67,8 +67,8 @@ pub fn source_path(entry: &Entry, repo_root: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Return the FileSystemAdapter for the first install target, or error.
-fn first_target(manifest: &Manifest) -> Result<&'static FileSystemAdapter, SkillfileError> {
+/// Return the adapter for the first install target, or error.
+fn first_target(manifest: &Manifest) -> Result<&'static dyn PlatformAdapter, SkillfileError> {
     if manifest.install_targets.is_empty() {
         return Err(SkillfileError::Manifest(
             "no install targets configured — run `skillfile install` first".into(),
@@ -88,14 +88,14 @@ mod tests {
     #[test]
     fn resolve_target_dir_global() {
         let result =
-            resolve_target_dir("claude-code", "agent", "global", Path::new("/tmp")).unwrap();
+            resolve_target_dir("claude-code", "agent", Scope::Global, Path::new("/tmp")).unwrap();
         assert!(result.to_string_lossy().ends_with(".claude/agents"));
     }
 
     #[test]
     fn resolve_target_dir_local() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = resolve_target_dir("claude-code", "agent", "local", tmp.path()).unwrap();
+        let result = resolve_target_dir("claude-code", "agent", Scope::Local, tmp.path()).unwrap();
         assert_eq!(result, tmp.path().join(".claude/agents"));
     }
 
@@ -137,7 +137,7 @@ mod tests {
             entries: vec![entry.clone()],
             install_targets: vec![InstallTarget {
                 adapter: "unknown".into(),
-                scope: "global".into(),
+                scope: Scope::Global,
             }],
         };
         let result = installed_path(&entry, &manifest, Path::new("/tmp"));
@@ -161,7 +161,7 @@ mod tests {
             entries: vec![entry.clone()],
             install_targets: vec![InstallTarget {
                 adapter: "claude-code".into(),
-                scope: "local".into(),
+                scope: Scope::Local,
             }],
         };
         let result = installed_path(&entry, &manifest, tmp.path()).unwrap();
@@ -203,7 +203,7 @@ mod tests {
             entries: vec![entry.clone()],
             install_targets: vec![InstallTarget {
                 adapter: "claude-code".into(),
-                scope: "local".into(),
+                scope: Scope::Local,
             }],
         };
         let skill_dir = tmp.path().join(".claude/skills/my-skill");
@@ -230,7 +230,7 @@ mod tests {
             entries: vec![entry.clone()],
             install_targets: vec![InstallTarget {
                 adapter: "claude-code".into(),
-                scope: "local".into(),
+                scope: Scope::Local,
             }],
         };
         // Create vendor cache

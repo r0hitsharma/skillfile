@@ -5,6 +5,7 @@ use skillfile_core::error::SkillfileError;
 use skillfile_core::lock::{lock_key, read_lock};
 use skillfile_core::models::{Entry, Manifest, SourceFields};
 use skillfile_core::parser::{parse_manifest, MANIFEST_NAME};
+use skillfile_core::patch::walkdir;
 use skillfile_deploy::paths::{installed_dir_files, installed_path};
 use skillfile_sources::strategy::{content_file, is_dir_entry, meta_sha};
 use skillfile_sources::sync::vendor_dir_for;
@@ -57,7 +58,7 @@ fn is_dir_modified_local(entry: &Entry, manifest: &Manifest, repo_root: &Path) -
             return Ok(false);
         }
 
-        for cache_file in walkdir_files(&vdir) {
+        for cache_file in walkdir(&vdir) {
             if cache_file.file_name().map_or(true, |n| n == ".meta") {
                 continue;
             }
@@ -83,26 +84,6 @@ fn is_dir_modified_local(entry: &Entry, manifest: &Manifest, repo_root: &Path) -
     })();
 
     result.unwrap_or(false)
-}
-
-fn walkdir_files(dir: &Path) -> Vec<std::path::PathBuf> {
-    let mut files = Vec::new();
-    walkdir_inner(dir, &mut files);
-    files.sort();
-    files
-}
-
-fn walkdir_inner(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walkdir_inner(&path, files);
-            } else {
-                files.push(path);
-            }
-        }
-    }
 }
 
 pub fn cmd_status(repo_root: &Path, check_upstream: bool) -> Result<(), SkillfileError> {
@@ -163,25 +144,29 @@ pub fn cmd_status(repo_root: &Path, check_upstream: bool) -> Result<(), Skillfil
 
         let status = if meta.as_deref() != Some(sha.as_str()) {
             format!("locked    sha={sha_short}  (missing or stale){annotation}")
-        } else if check_upstream && matches!(entry.source, SourceFields::Github { .. }) {
-            let cache_key = (entry.owner_repo().to_string(), entry.ref_().to_string());
-            let upstream_sha = if let Some(cached) = sha_cache.get(&cache_key) {
-                cached.clone()
+        } else if check_upstream {
+            if let SourceFields::Github {
+                owner_repo, ref_, ..
+            } = &entry.source
+            {
+                let cache_key = (owner_repo.clone(), ref_.clone());
+                let upstream_sha = if let Some(cached) = sha_cache.get(&cache_key) {
+                    cached.clone()
+                } else {
+                    let client = skillfile_sources::http::UreqClient::new();
+                    let resolved =
+                        skillfile_sources::resolver::resolve_github_sha(&client, owner_repo, ref_)?;
+                    sha_cache.insert(cache_key, resolved.clone());
+                    resolved
+                };
+                if upstream_sha == *sha {
+                    format!("up to date  sha={sha_short}{annotation}")
+                } else {
+                    let upstream_short = &upstream_sha[..12.min(upstream_sha.len())];
+                    format!("outdated    locked={sha_short}  upstream={upstream_short}{annotation}")
+                }
             } else {
-                let agent = ureq::Agent::new_with_defaults();
-                let resolved = skillfile_sources::resolver::resolve_github_sha(
-                    &agent,
-                    entry.owner_repo(),
-                    entry.ref_(),
-                )?;
-                sha_cache.insert(cache_key, resolved.clone());
-                resolved
-            };
-            if upstream_sha == *sha {
-                format!("up to date  sha={sha_short}{annotation}")
-            } else {
-                let upstream_short = &upstream_sha[..12.min(upstream_sha.len())];
-                format!("outdated    locked={sha_short}  upstream={upstream_short}{annotation}")
+                format!("locked    sha={sha_short}{annotation}")
             }
         } else {
             format!("locked    sha={sha_short}{annotation}")

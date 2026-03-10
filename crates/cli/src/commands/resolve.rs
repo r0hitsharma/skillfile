@@ -99,20 +99,20 @@ fn resolve_single_file(
     repo_root: &Path,
 ) -> Result<(), SkillfileError> {
     let filename = format!("{}.md", entry.name);
-    let agent = ureq::Agent::new_with_defaults();
+    let client = skillfile_sources::http::UreqClient::new();
 
     eprintln!(
         "  fetching upstream at old sha={} (common ancestor) ...",
         &conflict.old_sha[..conflict.old_sha.len().min(12)]
     );
-    let base = fetch_file_at_sha(&agent, entry, &conflict.old_sha)?;
+    let base = fetch_file_at_sha(&client, entry, &conflict.old_sha)?;
     eprintln!("done");
 
     eprintln!(
         "  fetching upstream at new sha={} ...",
         &conflict.new_sha[..conflict.new_sha.len().min(12)]
     );
-    let theirs = fetch_file_at_sha(&agent, entry, &conflict.new_sha)?;
+    let theirs = fetch_file_at_sha(&client, entry, &conflict.new_sha)?;
     eprintln!("done");
 
     let result = parse_manifest(&repo_root.join(MANIFEST_NAME))?;
@@ -181,20 +181,20 @@ fn resolve_dir_entry(
     conflict: &ConflictState,
     repo_root: &Path,
 ) -> Result<(), SkillfileError> {
-    let agent = ureq::Agent::new_with_defaults();
+    let client = skillfile_sources::http::UreqClient::new();
 
     eprintln!(
         "  fetching upstream at old sha={} (common ancestor) ...",
         &conflict.old_sha[..conflict.old_sha.len().min(12)]
     );
-    let base_files = fetch_dir_at_sha(&agent, entry, &conflict.old_sha)?;
+    let base_files = fetch_dir_at_sha(&client, entry, &conflict.old_sha)?;
     eprintln!("done");
 
     eprintln!(
         "  fetching upstream at new sha={} ...",
         &conflict.new_sha[..conflict.new_sha.len().min(12)]
     );
-    let theirs_files = fetch_dir_at_sha(&agent, entry, &conflict.new_sha)?;
+    let theirs_files = fetch_dir_at_sha(&client, entry, &conflict.new_sha)?;
     eprintln!("done");
 
     let result = parse_manifest(&repo_root.join(MANIFEST_NAME))?;
