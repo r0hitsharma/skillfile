@@ -148,7 +148,9 @@ impl PlatformAdapter for FileSystemAdapter {
         opts: &InstallOptions,
     ) -> DeployResult {
         let target_dir = self.target_dir(entry.entity_type.as_str(), scope, repo_root);
-        let is_dir = is_dir_entry(entry);
+        // Use filesystem truth: source.is_dir() catches local directory entries
+        // that is_dir_entry() misses (it only inspects GitHub path_in_repo).
+        let is_dir = is_dir_entry(entry) || source.is_dir();
 
         if is_dir
             && self

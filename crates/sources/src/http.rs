@@ -43,8 +43,14 @@ pub struct UreqClient {
 
 impl UreqClient {
     pub fn new() -> Self {
+        let config = ureq::config::Config::builder()
+            // Preserve Authorization header on same-host HTTPS redirects.
+            // GitHub returns 301 for renamed repos (api.github.com -> api.github.com);
+            // the default (Never) strips auth, causing 401 on the redirect target.
+            .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
+            .build();
         Self {
-            agent: ureq::Agent::new_with_defaults(),
+            agent: ureq::Agent::new_with_config(config),
         }
     }
 

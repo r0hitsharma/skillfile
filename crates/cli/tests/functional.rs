@@ -206,3 +206,68 @@ fn status_after_install() {
         .stdout(predicate::str::contains("code-refactorer"))
         .stdout(predicate::str::contains("requesting-code-review"));
 }
+
+/// Local directory entries must be deployed as directories, not empty .md files.
+///
+/// Regression test: is_dir_entry() only inspected GitHub path_in_repo and
+/// returned false for all local entries. When the local path was a directory,
+/// deploy_entry treated it as a single file, fs::copy(dir, file.md) failed
+/// silently, and install printed a success message with nothing actually written.
+#[test]
+fn install_local_dir_entry() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create a local skill directory with multiple files
+    let skill_dir = dir.path().join("skills/my-local-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "# My Local Skill\n\nMain content.\n",
+    )
+    .unwrap();
+    std::fs::write(skill_dir.join("extra.md"), "# Extra\n\nBonus content.\n").unwrap();
+
+    // Also create a single-file local skill for comparison
+    std::fs::create_dir_all(dir.path().join("skills")).unwrap();
+    std::fs::write(dir.path().join("skills/simple.md"), "# Simple Skill\n").unwrap();
+
+    std::fs::write(
+        dir.path().join("Skillfile"),
+        "install  claude-code  local\n\
+         \n\
+         local  skill  my-local-skill  skills/my-local-skill\n\
+         local  skill  simple  skills/simple.md\n",
+    )
+    .unwrap();
+
+    // No network needed — all local
+    sf(dir.path()).arg("install").assert().success();
+
+    // Directory entry: deployed as nested directory
+    let deployed_dir = dir.path().join(".claude/skills/my-local-skill");
+    assert!(
+        deployed_dir.is_dir(),
+        "local dir entry must be deployed as a directory, not a .md file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(deployed_dir.join("SKILL.md")).unwrap(),
+        "# My Local Skill\n\nMain content.\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(deployed_dir.join("extra.md")).unwrap(),
+        "# Extra\n\nBonus content.\n"
+    );
+    // Must NOT create a spurious .md file
+    assert!(
+        !dir.path().join(".claude/skills/my-local-skill.md").exists(),
+        "must not create my-local-skill.md for a directory source"
+    );
+
+    // Single-file entry: still works as before
+    let simple = dir.path().join(".claude/skills/simple.md");
+    assert!(simple.is_file());
+    assert_eq!(
+        std::fs::read_to_string(&simple).unwrap(),
+        "# Simple Skill\n"
+    );
+}

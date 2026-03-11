@@ -4,6 +4,21 @@ All notable changes to skillfile are documented here.
 
 ---
 
+## v1.0.1 — 2026-03-11
+
+### Fixed
+
+- **Local directory entries now deploy correctly** — `is_dir_entry()` only inspected GitHub `path_in_repo`, so local directory sources were silently treated as single files. `fs::copy(dir, file.md)` failed without error, and `install` printed success with nothing written. Now uses filesystem truth (`source.is_dir()`) as a fallback.
+- **Renamed GitHub repos no longer fail silently** — when a repository has been renamed, `resolve_github_sha` now detects the rename via the GitHub API and tells you the new name, instead of a generic "could not resolve" error.
+
+### Changed
+
+- **Parallel sync** — `skillfile sync` and `skillfile install` now resolve SHAs and fetch entries in parallel using scoped threads. Manifests with many entries sync significantly faster.
+- **HTTP redirect auth headers preserved** — ureq now keeps the `Authorization` header on same-host HTTPS redirects. This fixes 401 errors when GitHub returns a 301 for renamed repositories.
+- Progress output is now atomic (full lines via `eprintln!`) — no more garbled interleaved output when entries sync in parallel.
+
+---
+
 ## v0.9.0 — 2026-03-09
 
 ### Added

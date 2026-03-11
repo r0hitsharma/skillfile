@@ -44,6 +44,27 @@ pub fn http_get(client: &dyn HttpClient, url: &str) -> Result<Vec<u8>, Skillfile
     client.get_bytes(url)
 }
 
+/// Check whether a GitHub repository has been renamed by comparing the
+/// API-returned `full_name` against the requested `owner_repo`.
+///
+/// When ureq follows a 301 redirect (renamed repo), the final response
+/// from `/repos/{old}` contains the new repo metadata. If `full_name`
+/// differs from what we asked for, the repo was renamed.
+///
+/// Returns `Some(new_full_name)` if renamed, `None` otherwise.
+fn check_repo_renamed(client: &dyn HttpClient, owner_repo: &str) -> Option<String> {
+    let url = format!("https://api.github.com/repos/{owner_repo}");
+    let text = client.get_json(&url).ok()??;
+    let data: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let full_name = data["full_name"].as_str()?;
+    // Case-insensitive comparison: GitHub normalises casing on rename.
+    if full_name.eq_ignore_ascii_case(owner_repo) {
+        None
+    } else {
+        Some(full_name.to_string())
+    }
+}
+
 /// Try to resolve a git ref to a commit SHA. Returns `None` on 4xx.
 fn try_resolve_sha(
     client: &dyn HttpClient,
@@ -60,6 +81,7 @@ fn try_resolve_sha(
             "invalid JSON in SHA response for {owner_repo}@{ref_}: {e}"
         ))
     })?;
+
     Ok(data["sha"].as_str().map(|s| s.to_string()))
 }
 
@@ -85,8 +107,17 @@ pub fn resolve_github_sha(
             return Ok(sha);
         }
     }
+    // Before giving up, check if the repo was renamed. ureq follows 301
+    // redirects transparently, so /repos/{old_name} may return the new
+    // repo's metadata with a different full_name.
+    if let Some(new_name) = check_repo_renamed(client, owner_repo) {
+        return Err(SkillfileError::Network(format!(
+            "repository '{owner_repo}' has been renamed to '{new_name}'.\n  \
+             Update the owner/repo in your Skillfile to the new name."
+        )));
+    }
     Err(SkillfileError::Network(format!(
-        "could not resolve {owner_repo}@{ref_}"
+        "could not resolve {owner_repo}@{ref_} -- check that the repository exists and the ref is valid"
     )))
 }
 
@@ -483,6 +514,105 @@ mod tests {
 
         let err = resolve_github_sha(&client, "org/repo", "main").unwrap_err();
         assert!(err.to_string().contains("could not resolve org/repo@main"));
+    }
+
+    // -----------------------------------------------------------------------
+    // check_repo_renamed — detects renamed repos via full_name mismatch
+    // -----------------------------------------------------------------------
+
+    fn repo_url(owner_repo: &str) -> String {
+        format!("https://api.github.com/repos/{owner_repo}")
+    }
+
+    #[test]
+    fn check_repo_renamed_detects_rename() {
+        let mut client = MockClient::new();
+        client.add_json(
+            &repo_url("old-owner/repo"),
+            r#"{"full_name": "new-owner/repo"}"#,
+        );
+
+        assert_eq!(
+            check_repo_renamed(&client, "old-owner/repo"),
+            Some("new-owner/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn check_repo_renamed_same_name_returns_none() {
+        let mut client = MockClient::new();
+        client.add_json(&repo_url("owner/repo"), r#"{"full_name": "owner/repo"}"#);
+
+        assert_eq!(check_repo_renamed(&client, "owner/repo"), None);
+    }
+
+    #[test]
+    fn check_repo_renamed_case_insensitive() {
+        let mut client = MockClient::new();
+        client.add_json(&repo_url("Owner/Repo"), r#"{"full_name": "owner/repo"}"#);
+
+        assert_eq!(check_repo_renamed(&client, "Owner/Repo"), None);
+    }
+
+    #[test]
+    fn check_repo_renamed_returns_none_on_4xx() {
+        let mut client = MockClient::new();
+        client.add_json_none(&repo_url("gone/repo"));
+
+        assert_eq!(check_repo_renamed(&client, "gone/repo"), None);
+    }
+
+    #[test]
+    fn check_repo_renamed_returns_none_on_network_error() {
+        let mut client = MockClient::new();
+        client.add_json_err(&repo_url("err/repo"), "connection refused");
+
+        assert_eq!(check_repo_renamed(&client, "err/repo"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_github_sha — renamed repo detection (end-to-end)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_github_sha_renamed_repo_shows_new_name() {
+        // SHA resolution fails (4xx on both main and master), but
+        // /repos/{old_name} returns the new name via redirect.
+        let mut client = MockClient::new();
+        client.add_json_none(&commit_url("old-owner/repo", "main"));
+        client.add_json_none(&commit_url("old-owner/repo", "master"));
+        client.add_json(
+            &repo_url("old-owner/repo"),
+            r#"{"full_name": "new-owner/repo"}"#,
+        );
+
+        let err = resolve_github_sha(&client, "old-owner/repo", "main").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("renamed to 'new-owner/repo'"),
+            "should include new name: {msg}"
+        );
+        assert!(
+            msg.contains("old-owner/repo"),
+            "should include old name: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_github_sha_rename_check_fails_falls_back() {
+        // SHA resolution fails, and the rename check also fails (4xx).
+        // Should fall back to the generic "could not resolve" message.
+        let mut client = MockClient::new();
+        client.add_json_none(&commit_url("old-owner/repo", "main"));
+        client.add_json_none(&commit_url("old-owner/repo", "master"));
+        client.add_json_none(&repo_url("old-owner/repo"));
+
+        let err = resolve_github_sha(&client, "old-owner/repo", "main").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("could not resolve"),
+            "should use generic fallback: {msg}"
+        );
     }
 
     #[test]

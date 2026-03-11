@@ -291,7 +291,7 @@ pub fn install_entry(
         }
     };
 
-    let is_dir = is_dir_entry(entry);
+    let is_dir = is_dir_entry(entry) || source.is_dir();
     let installed = adapter.deploy_entry(entry, &source, target.scope, repo_root, opts);
 
     if !installed.is_empty() && !opts.dry_run {
@@ -509,6 +509,37 @@ mod tests {
         let dest = dir.path().join(".claude/skills/my-skill.md");
         assert!(dest.exists());
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "# My Skill");
+    }
+
+    #[test]
+    fn install_local_dir_entry_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        // Local source is a directory (not a .md file)
+        let source_dir = dir.path().join("skills/python-testing");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("SKILL.md"), "# Python Testing").unwrap();
+        std::fs::write(source_dir.join("examples.md"), "# Examples").unwrap();
+
+        let entry = make_local_entry("python-testing", "skills/python-testing");
+        let target = make_target("claude-code", Scope::Local);
+        install_entry(&entry, &target, dir.path(), None).unwrap();
+
+        // Must be deployed as a directory (nested mode), not as a single .md file
+        let dest = dir.path().join(".claude/skills/python-testing");
+        assert!(dest.is_dir(), "local dir entry must deploy as directory");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "# Python Testing"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("examples.md")).unwrap(),
+            "# Examples"
+        );
+        // Must NOT create a .md file at the target
+        assert!(
+            !dir.path().join(".claude/skills/python-testing.md").exists(),
+            "should not create python-testing.md for a dir source"
+        );
     }
 
     #[test]
