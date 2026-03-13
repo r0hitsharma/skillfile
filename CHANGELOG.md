@@ -4,6 +4,30 @@ All notable changes to skillfile are documented here.
 
 ---
 
+## v1.2.0
+
+### Added
+
+- **Interactive init wizard** — `skillfile init` now uses a modern setup wizard (cliclack) with arrow-key navigation and space-to-toggle platform selection. No more typing platform names manually.
+  - Scope picker: choose `local`, `global`, or `both` (adds both scopes per platform)
+  - Entity type hints next to each platform ("skill, agent" or "skill only")
+  - Existing platforms pre-selected when re-running `init` on a repo that already has a Skillfile
+- **Clone flow guidance** — when you run `skillfile install` for the first time after cloning a repo, it now shows which platforms are configured and suggests `skillfile init` to add yours.
+
+### Changed
+
+- **`init` requires an interactive terminal** — running `init` in CI or piped input now errors with a clear message pointing to `skillfile add` as the non-interactive alternative.
+- **CI pipeline restructured** — static checks (fmt + clippy) now gate test jobs, saving CI minutes on bad pushes. Functional tests run under coverage. macOS gets its own test job.
+- **`registry.rs` split into modules** — the 1479-line file is now `registry/mod.rs`, `registry/agentskill.rs`, `registry/skillssh.rs`, `registry/skillhub.rs`.
+- **Workspace-level clippy lints** — complexity thresholds (cognitive complexity, line count, nesting depth, argument count) are now enforced via `[workspace.lints.clippy]`.
+- **Test crate restructured** — subprocess-based tests moved to a dedicated `tests/` workspace crate with shared binary-resolution helpers. Network tests wrapped with retry (3 attempts, 2s delay).
+
+### Fixed
+
+- **Stale binary in CI** — functional tests spawn the compiled `skillfile` binary as a subprocess. `cargo test` does not produce this binary, and the CI cache (keyed on `Cargo.lock`, not source hash) could serve one compiled from a previous commit. A pre-build step now ensures the binary is always fresh.
+
+---
+
 ## v1.1.0
 
 ### Added
