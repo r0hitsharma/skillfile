@@ -27,8 +27,8 @@ Tool-agnostic AI skill & agent manager - the Brewfile for your AI tooling.
 Declare skills and agents in a Skillfile, lock them to exact SHAs, and deploy
 to any supported platform with a single command.
 
-Supported platforms: claude-code, codex, copilot, cursor, gemini-cli,
-opencode, windsurf.
+Supported platforms: claude-code, codex, copilot, cursor, factory,
+gemini-cli, opencode, windsurf.
 
 Quick start:
   skillfile init                          # configure platforms
