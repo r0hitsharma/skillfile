@@ -101,7 +101,7 @@ pub struct EntityConfig {
 /// Filesystem-based platform adapter.
 ///
 /// Each instance is configured with a name and a map of `EntityConfig`s.
-/// All three built-in adapters (claude-code, gemini-cli, codex) are instances
+/// All built-in adapters (claude-code, factory, gemini-cli, etc.) are instances
 /// of this struct with different configurations — the `PlatformAdapter` trait
 /// allows alternative implementations if needed.
 #[derive(Debug, Clone)]
@@ -494,6 +494,7 @@ struct AdapterSpec {
 /// | Platform    | Skills | Agents (Flat) | Global prefix              | Local prefix     |
 /// |-------------|--------|---------------|----------------------------|------------------|
 /// | claude-code | yes    | yes           | `~/.claude/`               | `.claude/`       |
+/// | factory     | yes    | yes           | `~/.factory/`              | `.factory/`      |
 /// | gemini-cli  | yes    | yes           | `~/.gemini/`               | `.gemini/`       |
 /// | codex       | yes    | no            | `~/.codex/`                | `.codex/`        |
 /// | cursor      | yes    | yes           | `~/.cursor/`               | `.cursor/`       |
@@ -514,6 +515,23 @@ const BUILTIN_ADAPTERS: &[AdapterSpec] = &[
                 entity_type: EntityType::Agent,
                 global_path: "~/.claude/agents",
                 local_path: ".claude/agents",
+                dir_mode: DirInstallMode::Flat,
+            },
+        ],
+    },
+    AdapterSpec {
+        name: "factory",
+        entities: &[
+            EntitySpec {
+                entity_type: EntityType::Skill,
+                global_path: "~/.factory/skills",
+                local_path: ".factory/skills",
+                dir_mode: DirInstallMode::Nested,
+            },
+            EntitySpec {
+                entity_type: EntityType::Agent,
+                global_path: "~/.factory/droids",
+                local_path: ".factory/droids",
                 dir_mode: DirInstallMode::Flat,
             },
         ],
@@ -670,6 +688,7 @@ mod tests {
     fn all_builtin_adapters_in_registry() {
         let reg = adapters();
         assert!(reg.contains("claude-code"));
+        assert!(reg.contains("factory"));
         assert!(reg.contains("gemini-cli"));
         assert!(reg.contains("codex"));
         assert!(reg.contains("cursor"));
@@ -682,13 +701,14 @@ mod tests {
     fn known_adapters_contains_all() {
         let names = known_adapters();
         assert!(names.contains(&"claude-code"));
+        assert!(names.contains(&"factory"));
         assert!(names.contains(&"gemini-cli"));
         assert!(names.contains(&"codex"));
         assert!(names.contains(&"cursor"));
         assert!(names.contains(&"windsurf"));
         assert!(names.contains(&"opencode"));
         assert!(names.contains(&"copilot"));
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
     }
 
     #[test]
@@ -713,6 +733,13 @@ mod tests {
         assert!(a.supports(EntityType::Agent));
         assert!(a.supports(EntityType::Skill));
         // No need to test unsupported string types — `EntityType` makes invalid calls unrepresentable.
+    }
+
+    #[test]
+    fn factory_supports_agent_and_skill() {
+        let a = adapters().get("factory").unwrap();
+        assert!(a.supports(EntityType::Agent));
+        assert!(a.supports(EntityType::Skill));
     }
 
     #[test]
@@ -742,6 +769,20 @@ mod tests {
         assert_eq!(
             a.target_dir(EntityType::Skill, &local(&tmp)),
             tmp.join(".claude/skills")
+        );
+    }
+
+    #[test]
+    fn local_target_dir_factory() {
+        let tmp = PathBuf::from("/tmp/test");
+        let a = adapters().get("factory").unwrap();
+        assert_eq!(
+            a.target_dir(EntityType::Agent, &local(&tmp)),
+            tmp.join(".factory/droids")
+        );
+        assert_eq!(
+            a.target_dir(EntityType::Skill, &local(&tmp)),
+            tmp.join(".factory/skills")
         );
     }
 
