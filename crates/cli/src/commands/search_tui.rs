@@ -24,7 +24,9 @@ use ratatui::{
 };
 use skillfile_sources::registry::{RegistryId, SearchResult};
 
-use super::add_tui::{parse_skill_frontmatter, PreviewContent};
+use super::skill_preview::{
+    build_skill_content_lines, parse_skill_frontmatter, PreviewContent, PREVIEW_HR,
+};
 
 // ===========================================================================
 // Model
@@ -529,80 +531,6 @@ fn build_description_lines<'a>(description: Option<&'a str>) -> Vec<Line<'a>> {
     lines
 }
 
-/// Apply basic markdown styling to a single line for the preview pane.
-///
-/// Recognizes: `#`..`####` headings, `- ` / `* ` list items,
-/// ``` ``` code fences, and `---` horizontal rules.
-fn style_markdown_line(line: &str) -> Line<'static> {
-    let trimmed = line.trim_start();
-    let heading_style = |level: usize| {
-        let color = if level == 1 { Color::Cyan } else { Color::Blue };
-        Style::default().fg(color).add_modifier(Modifier::BOLD)
-    };
-
-    if let Some(text) = trimmed.strip_prefix("#### ") {
-        Line::from(Span::styled(text.to_string(), heading_style(4)))
-    } else if let Some(text) = trimmed.strip_prefix("### ") {
-        Line::from(Span::styled(text.to_string(), heading_style(3)))
-    } else if let Some(text) = trimmed.strip_prefix("## ") {
-        Line::from(Span::styled(text.to_string(), heading_style(2)))
-    } else if let Some(text) = trimmed.strip_prefix("# ") {
-        Line::from(Span::styled(text.to_string(), heading_style(1)))
-    } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-        let indent = line.len() - trimmed.len();
-        let prefix = " ".repeat(indent);
-        Line::from(vec![
-            Span::raw(prefix),
-            Span::styled("  \u{2022} ", Style::default().fg(Color::DarkGray)),
-            Span::raw(trimmed[2..].to_string()),
-        ])
-    } else if trimmed.starts_with("```") {
-        Line::from(Span::styled(
-            line.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ))
-    } else if trimmed == "---" {
-        Line::from(Span::styled(
-            SKILL_PREVIEW_HR,
-            Style::default().fg(Color::DarkGray),
-        ))
-    } else {
-        Line::from(line.to_string())
-    }
-}
-
-/// Horizontal rule separating the SKILL.md section from registry metadata.
-const SKILL_PREVIEW_HR: &str = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
-
-/// Render the SKILL.md preview section (loaded content).
-fn build_skill_loaded_lines(content: &PreviewContent) -> Vec<Line<'static>> {
-    let label_style = Style::default().fg(Color::DarkGray);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some(name) = &content.name {
-        lines.push(Line::from(vec![
-            Span::styled("Name:        ", label_style),
-            Span::styled(name.clone(), Style::default().add_modifier(Modifier::BOLD)),
-        ]));
-    }
-    if let Some(desc) = &content.description {
-        lines.push(Line::from(vec![
-            Span::styled("Description: ", label_style),
-            Span::raw(desc.clone()),
-        ]));
-    }
-    if let Some(risk) = &content.risk {
-        lines.push(Line::from(vec![
-            Span::styled("Risk:        ", label_style),
-            Span::raw(risk.clone()),
-        ]));
-    }
-    if let Some(body) = &content.body_excerpt {
-        lines.push(Line::from(""));
-        lines.extend(body.lines().map(style_markdown_line));
-    }
-    lines
-}
-
 /// Render the SKILL.md preview section for the preview pane.
 fn build_skill_preview_section(state: Option<&SkillPreviewState>) -> Vec<Line<'static>> {
     let header_style = Style::default()
@@ -613,20 +541,20 @@ fn build_skill_preview_section(state: Option<&SkillPreviewState>) -> Vec<Line<'s
             let mut lines: Vec<Line<'static>> = vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    SKILL_PREVIEW_HR,
+                    PREVIEW_HR,
                     Style::default().fg(Color::DarkGray),
                 )),
                 Line::from(""),
                 Line::from(Span::styled("SKILL.md:", header_style)),
                 Line::from(""),
             ];
-            lines.extend(build_skill_loaded_lines(content));
+            lines.extend(build_skill_content_lines(content));
             lines
         }
         Some(SkillPreviewState::Loading) => vec![
             Line::from(""),
             Line::from(Span::styled(
-                SKILL_PREVIEW_HR,
+                PREVIEW_HR,
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
@@ -638,7 +566,7 @@ fn build_skill_preview_section(state: Option<&SkillPreviewState>) -> Vec<Line<'s
         Some(SkillPreviewState::Failed) => vec![
             Line::from(""),
             Line::from(Span::styled(
-                SKILL_PREVIEW_HR,
+                PREVIEW_HR,
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
