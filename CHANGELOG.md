@@ -18,6 +18,7 @@ All notable changes to skillfile are documented here.
 ### Changed
 
 - **HTML entity decoding** - replaced hand-rolled 8-entity decoder with the `html-escape` crate, covering all 2,231+ named, numeric, and hex HTML entities. Fixes garbled characters in skills.sh preview content.
+- **Shell completions** - `skillfile completions <shell>` generates static completion scripts for bash, zsh, fish, and PowerShell. Dynamic completions via `eval "$(COMPLETE=bash skillfile)"` add entry name completion for `remove`, `pin`, `unpin`, `diff`, and `resolve` by reading the Skillfile at tab-press time.
 
 ### Fixed
 
